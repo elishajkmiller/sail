@@ -153,23 +153,69 @@ test('whatever stands on a ship is put in her rocking group and moves with her t
   assert.ok(Math.abs(far - far2) > 0.05, 'the deck is not level while she rocks');
 });
 
-test('the sea knows the camera and the screen, so that each block of pixels can be worked out from where its ray meets the water', async () => {
-  const { updateSea, SEA_PIXEL } = await import('../public/js/scene.js');
+test('the sea knows the camera and the picture it draws into, so that each block of pixels can be worked out from where its ray meets the water', async () => {
+  const { updateSea } = await import('../public/js/scene.js');
   const sea = makeSea();
   const cam = new THREE.PerspectiveCamera(60, 1400 / 900, 0.3, 5000);
   cam.position.set(10, 12, -30);
   cam.lookAt(10, 0, 0);
-  const fakeRenderer = { getDrawingBufferSize: (v) => v.set(1400, 900), getPixelRatio: () => 1 };
-  updateSea(sea, cam, fakeRenderer);
+  updateSea(sea, cam, new THREE.Vector2(466, 300), 1);
   const u = sea.material.uniforms;
-  assert.deepEqual([u.uRes.value.x, u.uRes.value.y, u.uPixel.value], [1400, 900, SEA_PIXEL]);
-  // the inverse of the view-projection takes the middle of the screen, far end, back to a point on the line the camera is looking along
+  assert.deepEqual([u.uRes.value.x, u.uRes.value.y, u.uPixel.value], [466, 300, 1]);
   const near = new THREE.Vector4(0, 0, -1, 1).applyMatrix4(u.uInvVP.value), far = new THREE.Vector4(0, 0, 1, 1).applyMatrix4(u.uInvVP.value);
   const dir = new THREE.Vector3(far.x / far.w - near.x / near.w, far.y / far.w - near.y / near.w, far.z / far.w - near.z / near.w).normalize();
   assert.ok(dir.y < 0 && Math.abs(dir.x) < 0.01 && dir.z > 0, `looks down and forward: ${dir.toArray()}`);
-  // where that ray meets the water, as the shader works it out
   const t = -cam.position.y / dir.y, hit = cam.position.clone().addScaledVector(dir, t);
   assert.ok(Math.abs(hit.x - 10) < 0.05 && Math.abs(hit.y) < 1e-6 && hit.z > -30 && hit.z < 1, `a point of the water in front of the camera: ${hit.toArray()}`);
-  updateSea(sea, cam, { getDrawingBufferSize: (v) => v.set(2800, 1800), getPixelRatio: () => 2 });
-  assert.equal(u.uPixel.value, SEA_PIXEL * 2, 'the same size of pixel on a sharp screen');
+  updateSea(sea, cam, new THREE.Vector2(2800, 1800), 6);
+  assert.deepEqual([u.uRes.value.x, u.uPixel.value], [2800, 6]);
+});
+
+test('the sea moves smoothly: its time is not cut into steps', async () => {
+  const sea = makeSea();
+  assert.ok(!/floor\(uTime/.test(sea.material.fragmentShader), 'no stop-motion');
+  assert.ok(/float tt = uTime;/.test(sea.material.fragmentShader));
+});
+
+test('the picture is drawn small, stretched with hard edges, and the text is drawn after it, sharp', async () => {
+  const { PixelPass, PIXEL, LABELS, textSprite, toonGradient } = await import('../public/js/scene.js');
+  const calls = [];
+  const fake = { setRenderTarget: (t) => calls.push(['target', t ? 'low' : 'screen']), clear: () => calls.push(['clear']), render: (s, c) => calls.push(['render', s.type, [...Array(2).keys()].map((l) => c.layers.isEnabled(l)).join('')]), clearDepth: () => calls.push(['clearDepth']), autoClear: true };
+  const pass = new PixelPass(fake);
+  pass.resize(1400, 900);
+  assert.deepEqual([pass.size.x, pass.size.y], [Math.floor(1400 / PIXEL), Math.floor(900 / PIXEL)]);
+  assert.equal(pass.target.texture.magFilter, THREE.NearestFilter, 'no smoothing: the pixels have hard edges');
+  const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera();
+  scene.background = new THREE.Color(0x123456);
+  const seen = [];
+  fake.render = ((was) => (s, c) => { seen.push(s.background ? 'background' : 'none'); was(s, c); })(fake.render);
+  pass.render(scene, cam);
+  assert.deepEqual(seen, ['background', 'none', 'none'], 'the background is drawn into the small picture only: it must not wipe the big one');
+  assert.equal(scene.background.getHex(), 0x123456, 'and is put back');
+  assert.deepEqual(calls.map((c) => c.join(':')), ['target:low', 'clear', 'render:Scene:truefalse', 'target:screen', 'clear', 'render:Scene:truefalse', 'clearDepth', 'render:Scene:falsetrue']);
+  assert.equal(fake.autoClear, true);
+  // (the second picture is the flat quad that shows the small one, drawn with its own camera; the third is the text, on layer 1 only)
+  assert.equal(cam.layers.isEnabled(0) && !cam.layers.isEnabled(LABELS), true, 'the camera is left as it was');
+  assert.equal(toonGradient().image.data.length, 4, 'the light comes in four flat steps');
+});
+
+test('the sail hangs from the top of the mast, and no mast stands in or above anything it should not', () => {
+  const box = (o) => new THREE.Box3().setFromObject(o);
+  const { boat } = makeCraft();
+  const [hull, mast, yard, sail] = boat.children;
+  const m = box(mast), y = box(yard), s = box(sail), h = box(hull);
+  assert.ok(Math.abs(m.min.y - h.max.y) < 0.05, `the boat's mast starts on her deck, not inside the hull: ${m.min.y} vs ${h.max.y}`);
+  assert.ok(m.max.y - y.max.y < 0.35 && m.max.y >= y.max.y - 0.01, 'the mast ends at the yard: no extra stick above the sail');
+  assert.ok(Math.abs(s.max.y - y.max.y) < 0.25, 'the sail hangs from the yard');
+  assert.ok(s.min.y > h.max.y, 'and clear of her deck');
+  const g = ship();
+  const view = buildShipView(g.sea[0], 'sailing');
+  const parts = view.group.children[0].children[3].children; // the deck props
+  const cyl = parts.filter((o) => o.geometry?.type === 'CylinderGeometry').map((o) => [o, box(o)]);
+  const tall = cyl.filter(([, b]) => b.max.y - b.min.y > 12).map(([, b]) => b)[0];
+  const yardB = cyl.filter(([, b]) => b.max.x - b.min.x > 8 || b.max.z - b.min.z > 8).map(([, b]) => b)[0];
+  const sailB = parts.filter((o) => o.geometry?.type === 'PlaneGeometry' && o.material.transparent).map(box)[0];
+  assert.ok(tall && yardB && sailB, 'a mast, a yard and a sail');
+  assert.ok(tall.max.y - yardB.max.y < 0.5 && tall.max.y >= yardB.max.y - 0.01, `her mast ends at the yard: ${tall.max.y} vs ${yardB.max.y}`);
+  assert.ok(Math.abs(sailB.max.y - yardB.max.y) < 0.3, 'her sail hangs from the yard');
 });

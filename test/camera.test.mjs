@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { look, turn, follow, shouldFollow, PITCH_MIN, PITCH_MAX, DRAG, FREE } from '../public/js/camera.js';
+import { look, turn, follow, shouldFollow, recenter, STAY, PITCH_MIN, PITCH_MAX, DRAG, FREE } from '../public/js/camera.js';
 
 const cam = () => ({ yaw: 0, pitch: 0.42, lastDrag: -10 });
 
@@ -43,4 +43,15 @@ test('the camera only drifts back when he is sailing, has not touched the mouse 
   assert.ok(!shouldFollow(c, 5, { onFoot: false, freeLook: true }), 'free look keeps it where it is looked');
   c.lastDrag = 4.5;
   assert.ok(!shouldFollow(c, 5, { onFoot: false, freeLook: false }), 'not at once after the mouse was moved');
+  c.lastDrag = 5;
+  assert.ok(!shouldFollow(c, 5 + STAY - 1, { onFoot: false, freeLook: false }), 'not for a long while: he can sail on and look about');
+  assert.ok(shouldFollow(c, 5 + STAY + 0.1, { onFoot: false, freeLook: false }), 'and then it comes back');
+});
+
+test('R puts the camera behind him at once, and it goes on following the boat', () => {
+  const c = cam();
+  look(c, 300, 200, DRAG, 10);
+  recenter(c, 1.25, 10);
+  assert.deepEqual([c.yaw, c.pitch], [1.25, 0.42]);
+  assert.ok(shouldFollow(c, 10, { onFoot: false, freeLook: false }), 'following again straight away');
 });

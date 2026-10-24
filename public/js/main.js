@@ -8,9 +8,9 @@ import { Game } from './game.js';
 import { PathIndex, condition } from './github.js';
 import * as treemap from './treemap.js';
 import { parseTarget } from './util.js';
-import { look, turn, follow, shouldFollow, DRAG, FREE } from './camera.js';
+import { look, turn, follow, shouldFollow, recenter, DRAG, FREE } from './camera.js';
 import { Panels } from './ui.js';
-import { makeSea, makeSky, makeLights, buildShipView, DotFleet, makeCraft, LabelPool, RoomLabels, waveHeight, setSeaHole, updateSea, PALETTE } from './scene.js';
+import { makeSea, makeSky, makeLights, buildShipView, DotFleet, makeCraft, LabelPool, RoomLabels, waveHeight, setSeaHole, updateSea, PixelPass, PIXEL, PALETTE } from './scene.js';
 import { levelY, HOLD_Y } from './deck.js';
 
 const store = {
@@ -36,6 +36,10 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(PALETTE.zenith);
 scene.fog = new THREE.Fog(0x2a3238, 500, 2600);
 const camera = new THREE.PerspectiveCamera(60, 1, 0.3, 5000);
+// the picture is drawn in big pixels (add ?crisp to the address for the smooth one)
+const crisp = new URLSearchParams(location.search).has('crisp');
+const pixels = new PixelPass(renderer);
+if (crisp) camera.layers.enableAll();
 const sea = makeSea(), sky = makeSky();
 scene.add(sky, sea, makeLights());
 const fleet = new DotFleet(3000);
@@ -252,7 +256,7 @@ function readInput() {
   const input = {
     move: { x: fx * fwd + rx * side, y: fy * fwd + ry * side }, throttle: Math.max(-1, Math.min(1, fwd)), steer: Math.max(-1, Math.min(1, side)),
     boost: down.has('ShiftLeft') || down.has('ShiftRight'),
-    leave: pressed.has('Space'), interact: pressed.has('KeyE'), esc: pressed.has('Escape'),
+    leave: pressed.has('Space'), interact: pressed.has('KeyE'), esc: pressed.has('Escape'), recenter: pressed.has('KeyR'),
   };
   if (pressed.has('Escape') && panels.cardState) { panels.hide(); input.esc = false; }
   pressed.clear();
@@ -262,6 +266,7 @@ function readInput() {
 // ---- one frame ----
 
 const eye = new THREE.Vector3();
+const drawSize = new THREE.Vector2();
 let last = performance.now() / 1000;
 let shownReading = null;
 const feed = { key: null, etag: '', seen: null, next: 0, busy: false };
@@ -333,7 +338,9 @@ const agoShort = (at, now) => { const s = Math.max(0, now - at); return s < 3600
 function frame() {
   const t = performance.now() / 1000, dt = Math.min(0.1, t - last);
   last = t;
-  game.step(dt, readInput());
+  const input = readInput();
+  game.step(dt, input);
+  if (input.recenter) recenter(cam, game.human ? game.human.face : game.boat.heading, t);
   handleEvents();
 
   // the player
@@ -369,7 +376,8 @@ function frame() {
   // the world
   sea.position.set(Math.round(camera.position.x / 12.5) * 12.5, 0, Math.round(camera.position.z / 12.5) * 12.5);
   sea.material.uniforms.uTime.value = t;
-  updateSea(sea, camera, renderer);
+  if (crisp) updateSea(sea, camera, renderer.getDrawingBufferSize(drawSize), Math.max(2, Math.round(PIXEL * renderer.getPixelRatio())));
+  else updateSea(sea, camera, pixels.size, 1);
   setSeaHole(sea, game.aboard !== null && game.level === 'hold' ? game.sea[game.aboard] : null);
   sky.position.copy(camera.position);
   const loaded = new Set(game.sea.map((m) => m.key));
@@ -393,15 +401,16 @@ function frame() {
   panels.prompt(game.prompt);
   const levelHint = { deck: 'the main deck: the flag, the tavern table, the hatch down to the hold, the door under the helm, the stairs up', hold: 'the hold: the cracks are here, and the files', helm: 'the helm: the wheel', quarters: "the captain's quarters" }[game.level];
   document.getElementById('hint').textContent = game.aboard !== null
-    ? `${levelHint}  -  W A S D walk, Shift run, click to walk, E to use what is beside you, Space back to your boat, mouse: drag to look or C for free look, Z X turn the camera, wheel zooms`
-    : 'W S sail  -  A D steer  -  Shift boost  -  sail over a ship to land on her  -  double-click a ship to board  -  mouse: drag to look or C for free look, Z X turn the camera, wheel zooms';
+    ? `${levelHint}  -  W A S D walk, Shift run, click to walk, E to use what is beside you, Space back to your boat, look with the mouse (drag, or C for free look) while you move; R puts the camera behind you; Z X turn it; wheel zooms`
+    : 'W S sail  -  A D steer  -  Shift boost  -  sail over a ship to land on her  -  double-click a ship to board  -  look with the mouse (drag, or C for free look) while you sail; R puts the camera behind the boat; Z X turn it; wheel zooms';
   pollFeed(t);
-  renderer.render(scene, camera);
+  if (crisp) renderer.render(scene, camera); else pixels.render(scene, camera);
   requestAnimationFrame(frame);
 }
 
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false);
+  pixels.resize(innerWidth, innerHeight);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 }

@@ -7,6 +7,11 @@ import { MARGIN, DECK_Y, HOLD_Y, HELM_RISE, hullFor, deckSize } from './deck.js'
 import { hullLength } from './atlas.js';
 import { hash32 } from './util.js';
 
+/** The layer the text sprites are on: the picture is drawn in big pixels without them, then they are drawn sharp on top. */
+export const LABELS = 1;
+/** How many screen pixels (CSS pixels) make one pixel of the picture. */
+export const PIXEL = 3;
+
 export const PALETTE = {
   bg: 0x282c34, fg: 0x9cdef2, panel: 0x111111, border: 0x355a66, gold: 0xd19a66, red: 0xe06c75, green: 0x50fa7b,
   deep: 0x0d2a3c, shallow: 0x23606e, horizon: 0xc98a5a, zenith: 0x1c2f45,
@@ -35,7 +40,7 @@ export const SEA_PIXEL = 4;
 /**
  * The sea: a big plane that follows the camera, waves in the vertex shader (the hulls ride these), and a pixel-art look in the fragment
  * shader: the colour of each block of screen pixels is worked out once, from where its ray meets the water, then cut into a few flat bands;
- * the crests are hard white pixels, the sun is a hard glint, the fog is banded, and the water moves in jumps five times a second.
+ * the crests are hard white pixels, the sun is a hard glint, and the fog is banded. The pixels are in space only: the water moves smoothly.
  */
 export function makeSea() {
   const geo = new THREE.PlaneGeometry(3200, 3200, 256, 256);
@@ -74,7 +79,7 @@ export function makeSea() {
           }
           if (inside) discard;
         }
-        float tt = floor(uTime * 5.0) / 5.0;
+        float tt = uTime;
         // the ray through the middle of this block of pixels, and where it meets the water (once more, for the height of the wave there)
         vec2 ndc = (floor(gl_FragCoord.xy / uPixel) * uPixel + 0.5 * uPixel) / uRes * 2.0 - 1.0;
         vec4 n0 = uInvVP * vec4(ndc, -1.0, 1.0); n0 /= n0.w;
@@ -113,15 +118,62 @@ export function makeSea() {
   return mesh;
 }
 
-/** Tells the sea shader where the camera is and how big the screen is (call each frame, after the camera has moved). */
-export function updateSea(sea, camera, renderer) {
+/** Tells the sea shader where the camera is and how big the picture it draws into is, in pixels (`block`: how many of them make one pixel of the sea). Call each frame, after the camera has moved. */
+export function updateSea(sea, camera, size, block = 1) {
   const u = sea.material.uniforms;
   camera.updateMatrixWorld();
   u.uInvVP.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
-  const size = renderer.getDrawingBufferSize(new THREE.Vector2());
-  u.uRes.value.copy(size);
-  // the same size of pixel on a sharp screen (its pixels are smaller)
-  u.uPixel.value = Math.max(2, Math.round(SEA_PIXEL * (renderer.getPixelRatio?.() ?? 1)));
+  u.uRes.value.set(size.x, size.y);
+  u.uPixel.value = block;
+}
+
+/**
+ * The picture in big pixels: the scene is drawn small (every PIXEL screen pixels are one) into a target that is not smoothed, stretched to the
+ * window with hard edges, and its colours are cut to a few steps. Then the text (its own layer) is drawn on top at full sharpness.
+ */
+export class PixelPass {
+  constructor(renderer, pixel = PIXEL) {
+    this.renderer = renderer;
+    this.pixel = pixel;
+    this.size = new THREE.Vector2(1, 1);
+    this.target = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: true, stencilBuffer: false });
+    this.screen = new THREE.Scene();
+    this.eye = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    this.material = new THREE.ShaderMaterial({
+      uniforms: { tMap: { value: this.target.texture }, uLevels: { value: 18 } },
+      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: 'uniform sampler2D tMap; uniform float uLevels; varying vec2 vUv; void main() { vec3 c = pow(max(texture2D(tMap, vUv).rgb, 0.0), vec3(1.0 / 2.2)); c = floor(c * uLevels + 0.5) / uLevels; gl_FragColor = vec4(c, 1.0); }',
+      depthTest: false, depthWrite: false,
+    });
+    this.screen.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.material));
+  }
+
+  /** The window changed size (in CSS pixels). */
+  resize(width, height) {
+    this.size.set(Math.max(1, Math.floor(width / this.pixel)), Math.max(1, Math.floor(height / this.pixel)));
+    this.target.setSize(this.size.x, this.size.y);
+  }
+
+  render(scene, camera) {
+    const r = this.renderer;
+    camera.layers.set(0);
+    r.setRenderTarget(this.target);
+    r.clear();
+    r.render(scene, camera);
+    r.setRenderTarget(null);
+    r.autoClear = false;
+    r.clear();
+    r.render(this.screen, this.eye);
+    r.clearDepth();
+    // (a scene with a background colour clears the whole screen when it is drawn: for the text it must not)
+    const background = scene.background;
+    scene.background = null;
+    camera.layers.set(LABELS);
+    r.render(scene, camera);
+    camera.layers.set(0);
+    scene.background = background;
+    r.autoClear = true;
+  }
 }
 
 /** Cuts a hole in the sea the shape of a ship's hull (so that her hold, below the water line, can be seen from above), or closes it (null). */
@@ -272,6 +324,7 @@ export function textSprite(lines, { color = '#9cdef2', size = 44, width = 1024 }
     labelCache.set(k, tex);
   }
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, fog: false }));
+  s.layers.set(LABELS);
   s.userData.aspect = tex.userData.aspect;
   return s;
 }
@@ -281,7 +334,17 @@ export function sizeSprite(s, worldWidth) { s.scale.set(worldWidth, worldWidth *
 
 // ---- one opened ship ----
 
-const mat = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0.05, ...extra });
+let gradient = null;
+/** Four flat steps of light, for cel shading (no smooth gradient from lit to dark). */
+export function toonGradient() {
+  if (!gradient) {
+    gradient = new THREE.DataTexture(new Uint8Array([80, 140, 205, 255]), 4, 1, THREE.RedFormat);
+    gradient.minFilter = gradient.magFilter = THREE.NearestFilter;
+    gradient.needsUpdate = true;
+  }
+  return gradient;
+}
+const mat = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: toonGradient(), ...extra });
 
 /**
  * The ship as a group, three storeys over one hull: the hold (rooms, walls, cracks, beams), the main deck (planks, hatch, mast and sail, flag,
@@ -419,15 +482,15 @@ export function buildShipView(ship, conditionName, flagTexture = null) {
   // ---- on the main deck: the mast and sail (what state it is in tells the condition), the flag and the tavern table ----
   const mx = w * 0.42;
   if (conditionName !== 'wreck') {
-    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 17, 8), mat(0x4a3320));
-    mast.position.set(mx, DECK_Y + 8.5, cy);
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 15.3, 8), mat(0x4a3320));
+    mast.position.set(mx, DECK_Y + 7.65, cy);
     const yard = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 10, 6), mat(0x4a3320));
     yard.rotation.x = Math.PI / 2;
     yard.position.set(mx, DECK_Y + 15, cy);
     const sail = new THREE.Mesh(new THREE.PlaneGeometry(9 * st.sailW + 0.001, 9 * st.sailH + 0.001), mat(st.sail, { side: THREE.DoubleSide, transparent: true, opacity: 0.93 }));
     sail.rotation.y = Math.PI / 2;
     sail.position.set(mx + 0.2, DECK_Y + 15 - 4.5 * st.sailH, cy);
-    propsG.add(mast, yard, sail);
+    propsG.add(mast, yard, sail, box(1.0, 0.25, 1.0, mx, DECK_Y + 0.12, cy, mat(0x3a2a1c)));
   } else {
     const stump = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.32, 3.2, 8), mat(0x3a2a1c));
     stump.position.set(mx, DECK_Y + 1.6, cy);
@@ -524,7 +587,7 @@ function unitHullGeometry() {
 export class DotFleet {
   constructor(capacity = 3000) {
     this.capacity = capacity;
-    const material = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9 });
+    const material = new THREE.MeshToonMaterial({ color: 0xffffff, gradientMap: toonGradient() });
     this.mesh = new THREE.InstancedMesh(unitHullGeometry(), material, capacity);
     this.mesh.frustumCulled = false;
     this.mesh.count = 0;
@@ -560,12 +623,17 @@ export function makeCraft() {
   const hull = new THREE.Mesh(hullGeometry(hullFor({ w: 9, h: 3.6 }).map((p) => ({ x: p.x * 0.5, y: p.y * 0.5 }))), mat(0x8a6240));
   hull.position.set(-2, 0, -0.9);
   boat.add(hull);
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.14, 7, 6), mat(0x4a3320));
-  mast.position.set(0, 4, 0);
-  const sail = new THREE.Mesh(new THREE.PlaneGeometry(4, 4.6), mat(0xe8dcc0, { side: THREE.DoubleSide, transparent: true, opacity: 0.94 }));
+  // the mast stands on her deck, ends at the yard, and the sail hangs from the yard
+  const top = DECK_Y + 6.4;
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.14, top - DECK_Y, 6), mat(0x4a3320));
+  mast.position.set(0, (DECK_Y + top) / 2, 0);
+  const yard = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 4.6, 6), mat(0x4a3320));
+  yard.rotation.x = Math.PI / 2;
+  yard.position.set(0.05, top - 0.15, 0);
+  const sail = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 4.2), mat(0xe8dcc0, { side: THREE.DoubleSide, transparent: true, opacity: 0.94 }));
   sail.rotation.y = Math.PI / 2;
-  sail.position.set(0.1, 4.6, 0);
-  boat.add(mast, sail);
+  sail.position.set(0.1, top - 0.15 - 2.1, 0);
+  boat.add(mast, yard, sail);
 
   const person = new THREE.Group();
   const body = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.38, 1.1, 10), mat(PALETTE.gold));

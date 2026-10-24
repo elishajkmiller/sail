@@ -20,7 +20,7 @@ Open source only (three.js is vendored in `public/vendor/`, MIT). No backend: th
 
 ## Keys
 
-Sailing: W S throttle, A D steer, Shift boost. Aboard: W A S D walk (the way the camera faces), Shift run, click to walk, E to use what is beside you (a station, a hatch, a ladder, stairs, a door, a crack to read, a room's file), Space to take off from any storey. Mouse: drag with either button to look, or press C (or the Free look button) and just move the mouse (Esc to stop); the wheel zooms; Z and X turn the camera from the keyboard.
+Sailing: W S throttle, A D steer, Shift boost. Aboard: W A S D walk (the way the camera faces), Shift run, click to walk, E to use what is beside you (a station, a hatch, a ladder, stairs, a door, a crack to read, a room's file), Space to take off from any storey. Mouse: drag with either button to look, or press C (or the Free look button) and just move the mouse (Esc to stop); the wheel zooms; Z and X turn the camera from the keyboard; R puts the camera behind you again. The camera stays where you put it while you sail (it only drifts back behind the boat after eight idle seconds), so you can move and look about together.
 
 ## Tokens
 

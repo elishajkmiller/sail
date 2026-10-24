@@ -23,12 +23,22 @@ export function turn(cam, dir, dt, now = 0) {
 }
 
 /** Swings the camera round to look the way the boat points, by the shorter way round. */
-export function follow(cam, heading, dt, rate = 1.6) {
+export function follow(cam, heading, dt, rate = 1.0) {
   const d = Math.atan2(Math.sin(heading - cam.yaw), Math.cos(heading - cam.yaw));
   cam.yaw += d * (1 - Math.exp(-rate * dt));
 }
 
-/** Whether the camera should drift back behind the boat: only at the helm of the boat, not while looking around, and not in free look. */
+/** How long the camera stays where it was put before it drifts back behind the boat. Long: you can sail forward and look about, and it is not taken from you. */
+export const STAY = 8;
+
+/** Whether the camera should drift back behind the boat: only at the helm of the boat, long after the mouse was last used, and never in free look. */
 export function shouldFollow(cam, now, { onFoot, freeLook }) {
-  return !onFoot && !freeLook && now - cam.lastDrag > 1.2;
+  return !onFoot && !freeLook && now - cam.lastDrag > STAY;
+}
+
+/** R: puts the camera straight behind whatever he is steering or walking (`heading`: the way the boat points, or the way he faces). */
+export function recenter(cam, heading, now = 0) {
+  cam.yaw = heading;
+  cam.pitch = 0.42;
+  cam.lastDrag = now - STAY - 1; // and it follows the boat again from here
 }
