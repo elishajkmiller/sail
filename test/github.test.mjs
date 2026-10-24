@@ -225,3 +225,22 @@ test('managing a repo: comment, close, reopen, list and merge pull requests', as
   await assert.rejects(g.setIssueState('deck', 'mast', 12, 'deleted'), (e) => e.kind === 'shape');
   await assert.rejects(new Github({ token: 't', fetch: async () => res(403, { message: 'Must have push access' }) }).setIssueState('deck', 'mast', 1, 'closed'), /push access/);
 });
+
+test('the owner and the top contributors are read for the captain\'s quarters', async () => {
+  const f = fakeFetch((url) => {
+    if (url.endsWith('/users/deck')) return res(200, { login: 'deck', type: 'Organization', name: 'Deck & Co‮', bio: 'We build\nmasts', company: null, location: 'Ithaca', followers: 120, following: 3, public_repos: 41, created_at: '2015-05-01T00:00:00Z', avatar_url: 'https://avatars.githubusercontent.com/u/1?v=4' });
+    if (url.endsWith('/users/gone')) return res(404, {});
+    if (url.includes('/contributors')) return res(200, [{ login: 'ann', contributions: 90, avatar_url: 'https://avatars.githubusercontent.com/u/2', type: 'User' }, { login: 'ci-bot', contributions: 40, avatar_url: 'https://evil.example/a.png', type: 'Bot' }, { login: '../x', contributions: 1 }]);
+    return res(404, {});
+  });
+  const g = new Github({ fetch: f });
+  const o = await g.owner('deck');
+  assert.deepEqual([o.type, o.name, o.bio, o.location, o.followers, o.publicRepos, o.company], ['Organization', 'Deck & Co', 'We build masts', 'Ithaca', 120, 41, '']);
+  assert.equal(o.avatar, 'https://avatars.githubusercontent.com/u/1?v=4');
+  await assert.rejects(g.owner('gone'), (e) => e.kind === 'notfound');
+  await assert.rejects(g.owner('../x'), (e) => e.kind === 'notfound');
+  const c = await g.contributors('deck', 'mast');
+  assert.deepEqual(c.map((x) => [x.login, x.contributions, x.bot]), [['ann', 90, false], ['ci-bot', 40, true]], 'a name that is not a login is dropped');
+  assert.equal(c[1].avatar, '', 'a picture can only come from GitHub');
+  assert.deepEqual(await new Github({ fetch: fakeFetch(() => res(204)) }).contributors('deck', 'empty'), [], 'an empty repo has no contributors');
+});

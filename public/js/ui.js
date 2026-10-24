@@ -89,7 +89,7 @@ export class Panels {
     if (!m) {
       kids.push(el('h2', { text: 'Ships' }),
         el('p', { text: 'Every public GitHub repo is a ship. Bring one in by name (owner/repo, or its address) or search for words, then sail to her.' }),
-        el('p', { class: 'muted', text: 'A ship\'s condition comes from her last push: sailing (90 days), anchored (a year), derelict (older). An archived repo is a wreck. Her open issues are cracks in her deck. Repos that the same people starred lie near each other.' }));
+        el('p', { class: 'muted', text: 'A ship\'s condition comes from her last push: sailing (90 days), anchored (a year), derelict (older). An archived repo is a wreck. Below her deck, in the hold, her open issues are cracks. On deck is the tavern table (discussions); the helm is where she is managed; under the helm are the captain\'s quarters. Repos that the same people starred lie near each other.' }));
     } else {
       const cond = condition(m.repo, now), r = m.repo;
       kids.push(el('h2', { text: r.fullName }),
@@ -99,9 +99,9 @@ export class Panels {
       kids.push(el('p', {}, ghLink(m, '', 'open on GitHub')));
       if (m.partial) kids.push(el('p', { class: 'gold', text: m.partial }));
       for (const n of m.notes) kids.push(el('p', { class: 'gold', text: n }));
-      kids.push(el('h3', { text: `Cracks (${m.issues.length}${m.moreIssues ? '+' : ''} open issues)` }));
+      kids.push(el('h3', { text: `Cracks in the hold (${m.issues.length}${m.moreIssues ? '+' : ''} open issues)` }));
       if (!m.issues.length) kids.push(el('p', { class: 'good', text: 'none: she is sound.' }));
-      else kids.push(el('p', { class: 'muted', text: 'Click one to walk to it.' }), el('ul', {}, ...m.issues.map((i) => el('li', { class: 'pick' + (game.reading?.ship === game.focus && game.reading?.issue === m.issues.indexOf(i) ? ' on' : ''), title: i.files.join('\n') || 'names no file: a crack in the hull', onclick: () => this.app.walkToIssue(m.issues.indexOf(i)) }, `#${i.number} ${i.title}`))));
+      else kids.push(el('p', { class: 'muted', text: 'Click one to go down to it.' }), el('ul', {}, ...m.issues.map((i) => el('li', { class: 'pick' + (game.reading?.ship === game.focus && game.reading?.issue === m.issues.indexOf(i) ? ' on' : ''), title: i.files.join('\n') || 'names no file: a crack in the hull', onclick: () => this.app.walkToIssue(m.issues.indexOf(i)) }, `#${i.number} ${i.title}`))));
       kids.push(el('h3', { text: 'Checks' }),
         !m.checks.total ? el('p', { class: 'muted', text: 'no check runs on the latest commit' })
           : !m.checks.failed.length ? el('p', { class: 'good', text: `all ${m.checks.total} passed` })
@@ -273,6 +273,32 @@ export class Panels {
     };
     body.append(tabs, list);
     show('Issues');
+  }
+
+  // the captain's desk: who owns her, and who has done the most work on her
+  async deskCard(shipIndex) {
+    const m = this.app.game.sea[shipIndex], { github } = this.app, note = el('p'), body = el('div');
+    this.show('desk', el('h2', { text: "The captain's quarters" }), el('p', { class: 'muted', text: `The owner and the top contributors of ${m.repo.fullName}` }), body, note);
+    body.append(el('p', { class: 'muted', text: 'opening the logbook...' }));
+    const [owner, people] = await Promise.all([this.guard(note, () => github.owner(m.repo.owner)), this.guard(note, () => github.contributors(m.repo.owner, m.repo.name))]);
+    if (this.cardState !== 'desk') return;
+    const now = this.app.game.now(), kids = [];
+    const picture = (url, cls) => (url ? el('img', { class: cls, src: url, alt: '', width: 48, height: 48, referrerpolicy: 'no-referrer' }) : null);
+    const who = (login) => el('a', { href: `https://github.com/${login}`, target: '_blank', rel: 'noopener noreferrer', text: login });
+    if (owner) {
+      kids.push(el('div', { class: 'profile' }, picture(owner.avatar, 'avatar'), el('div', {},
+        el('h2', { text: owner.name || owner.login }), el('p', { class: 'muted' }, who(owner.login), `  ${owner.type === 'Organization' ? 'organisation' : 'person'}, on GitHub ${ago(owner.createdAt, now).replace(' ago', '')}`))),
+      owner.bio ? el('p', { text: owner.bio }) : null,
+      el('p', { class: 'muted', text: [owner.company, owner.location].filter(Boolean).join('  -  ') }),
+      el('p', {}, el('span', { class: 'gold', text: `${owner.followers}` }), ' followers   ', el('span', { class: 'gold', text: `${owner.publicRepos}` }), ' public repos', owner.type === 'User' ? el('span', {}, '   ', el('span', { class: 'gold', text: `${owner.following}` }), ' following') : null));
+    }
+    kids.push(el('h3', { text: 'Top contributors' }));
+    if (people) {
+      if (!people.length) kids.push(el('p', { class: 'muted', text: 'Nobody has signed the log yet.' }));
+      else kids.push(el('ul', { class: 'people' }, ...people.map((c) => el('li', {}, picture(c.avatar, 'avatar small'), who(c.login), el('span', { class: 'muted', text: `  ${c.contributions} commits${c.bot ? '  (a bot)' : ''}` })))));
+      this.app.setPortraits(shipIndex, people.filter((c) => !c.bot).map((c) => c.avatar));
+    }
+    body.replaceChildren(...kids);
   }
 
   // a file of a room

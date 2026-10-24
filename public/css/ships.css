@@ -52,3 +52,10 @@ button.armed { background: var(--red); color: #111; border-color: var(--red); }
 #ticker li { margin-top: 2px; }
 #hint { position: absolute; left: 340px; right: 12px; bottom: 8px; line-height: 1.35; color: var(--muted); text-shadow: 0 0 4px #000; pointer-events: none; }
 @media (max-width: 760px) { #side { width: 100%; height: 38vh; top: auto; border-right: 0; border-top: 1px solid var(--border); } #top { left: 10px; } #hint { left: 12px; bottom: calc(38vh + 6px); } #card { width: calc(100vw - 20px); } #prompt { left: 50%; bottom: calc(38vh + 40px); } }
+#card .profile { display: flex; gap: 10px; align-items: center; }
+#card .profile h2 { margin: 0 0 2px; }
+#card img.avatar { width: 48px; height: 48px; border-radius: 6px; border: 1px solid var(--border); background: #0b0d10; }
+#card img.avatar.small { width: 28px; height: 28px; border-radius: 4px; vertical-align: middle; margin-right: 8px; }
+#card ul.people li { display: flex; align-items: center; }
+#card ul.people .muted { margin-left: 8px; }
+#card h3 { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }

@@ -3,8 +3,7 @@
 // The colours are the Odysseus app's: its blue-grey night, pale cyan and warm gold, with the red it uses for trouble.
 
 import * as THREE from '../vendor/three.module.min.js';
-import { MARGIN } from './deck.js';
-import { hullFor, deckSize } from './deck.js';
+import { MARGIN, DECK_Y, HOLD_Y, HELM_RISE, hullFor, deckSize } from './deck.js';
 import { hullLength } from './atlas.js';
 import { hash32 } from './util.js';
 
@@ -39,6 +38,8 @@ export function makeSea() {
       uTime: { value: 0 }, uSun: { value: new THREE.Vector3(-0.6, 0.18, -0.5).normalize() },
       uDeep: { value: hex(PALETTE.deep) }, uShallow: { value: hex(PALETTE.shallow) }, uHorizon: { value: hex(PALETTE.horizon) }, uZenith: { value: hex(PALETTE.zenith) },
       uFog: { value: hex(0x2a3238) },
+      // a hole in the sea where a hull is, while he is below deck in it (the hold is under the water line): the hull's outline, in the world
+      uHoleOn: { value: 0 }, uHullN: { value: 0 }, uHull: { value: Array.from({ length: 24 }, () => new THREE.Vector2()) },
     },
     vertexShader: `${WAVES}
       uniform float uTime; varying vec3 vWorld; varying vec3 vNormal;
@@ -52,8 +53,20 @@ export function makeSea() {
       }`,
     fragmentShader: `
       uniform vec3 uSun; uniform vec3 uDeep; uniform vec3 uShallow; uniform vec3 uHorizon; uniform vec3 uZenith; uniform vec3 uFog;
+      uniform float uHoleOn; uniform int uHullN; uniform vec2 uHull[24];
       varying vec3 vWorld; varying vec3 vNormal;
       void main() {
+        if (uHoleOn > 0.5) {
+          vec2 p = vWorld.xz;
+          bool inside = true;
+          for (int i = 0; i < 24; i++) {
+            if (i >= uHullN) break;
+            vec2 a = uHull[i];
+            vec2 b = uHull[(i + 1 == uHullN) ? 0 : i + 1];
+            if ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x) < 0.0) { inside = false; break; }
+          }
+          if (inside) discard;
+        }
         vec3 N = normalize(vNormal);
         vec3 V = normalize(cameraPosition - vWorld);
         float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0);
@@ -71,6 +84,17 @@ export function makeSea() {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
   return mesh;
+}
+
+/** Cuts a hole in the sea the shape of a ship's hull (so that her hold, below the water line, can be seen from above), or closes it (null). */
+export function setSeaHole(sea, ship) {
+  const u = sea.material.uniforms;
+  if (!ship) { u.uHoleOn.value = 0; return; }
+  const inner = insetPolygon(ship.deck.hull, 0.45);
+  if (inner.length > 24) { u.uHoleOn.value = 0; return; }
+  u.uHullN.value = inner.length;
+  inner.forEach((p, i) => u.uHull.value[i].set(ship.x + p.x, ship.y + p.y));
+  u.uHoleOn.value = 1;
 }
 
 /** The sky: a dome with a warm horizon and the low sun. */
@@ -128,12 +152,22 @@ export function insetPolygon(pts, d) {
   });
 }
 
-export const DECK_Y = 1.6;
-const KEEL = 1.4;
+export { DECK_Y, HOLD_Y } from './deck.js';
+const KEEL = 2.8;
 
-/** The solid hull from the outline (x, y of the deck) to a block from below the water to the deck. */
+/** The solid hull from the outline (x, y of the deck) to a block from below the water to the deck (for ships far away and for the boat). */
 export function hullGeometry(hull) {
   const shape = new THREE.Shape(hull.map((p) => new THREE.Vector2(p.x, p.y)));
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: DECK_Y + KEEL, bevelEnabled: false, steps: 1 });
+  geo.rotateX(Math.PI / 2);
+  geo.translate(0, DECK_Y, 0);
+  return geo;
+}
+
+/** The hull of a ship that can be gone into: the wall only, from the keel to the deck, and open in the middle (the hold). */
+export function shellGeometry(hull, wall = 0.5) {
+  const shape = new THREE.Shape(hull.map((p) => new THREE.Vector2(p.x, p.y)));
+  shape.holes.push(new THREE.Path(insetPolygon(hull, wall).map((p) => new THREE.Vector2(p.x, p.y)).reverse()));
   const geo = new THREE.ExtrudeGeometry(shape, { depth: DECK_Y + KEEL, bevelEnabled: false, steps: 1 });
   geo.rotateX(Math.PI / 2);
   geo.translate(0, DECK_Y, 0);
@@ -147,6 +181,19 @@ export function railGeometry(hull) {
   const geo = new THREE.ExtrudeGeometry(shape, { depth: 1.0, bevelEnabled: false });
   geo.rotateX(Math.PI / 2);
   geo.translate(0, DECK_Y + 1.0, 0);
+  return geo;
+}
+
+/** A flat floor from the outline, at a height, with optional square holes ({ x, y, size } in the outline's own coordinates). */
+export function floorGeometry(outline, y, holes = []) {
+  const shape = new THREE.Shape(outline.map((p) => new THREE.Vector2(p.x, p.y)));
+  for (const h of holes) {
+    const r = h.size / 2;
+    shape.holes.push(new THREE.Path([new THREE.Vector2(h.x - r, h.y - r), new THREE.Vector2(h.x - r, h.y + r), new THREE.Vector2(h.x + r, h.y + r), new THREE.Vector2(h.x + r, h.y - r)]));
+  }
+  const geo = new THREE.ShapeGeometry(shape);
+  geo.rotateX(Math.PI / 2);
+  geo.translate(0, y, 0);
   return geo;
 }
 
@@ -199,8 +246,10 @@ export function sizeSprite(s, worldWidth) { s.scale.set(worldWidth, worldWidth *
 const mat = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0.05, ...extra });
 
 /**
- * The ship as a group: hull, rail, rooms, walls, cracks with their beams, the mast and sail, the flag, the tavern table and the wheel.
- * `ship` is a game.js "moored" entry. Returns { group, update(t, state), dispose }.
+ * The ship as a group, three storeys over one hull: the hold (rooms, walls, cracks, beams), the main deck (planks, hatch, mast and sail, flag,
+ * tavern table, stairs), the quarters at the stern with the helm (a platform with the wheel) on their roof, and the furniture inside.
+ * `setLevel(level)` shows the storey he is on, cut away from above (the deck lifts off when he goes below, the roof when he goes in).
+ * `ship` is a game.js "moored" entry. Returns { group, update(t, ...), setLevel(level), setPortraits(urls), dispose }.
  */
 export function buildShipView(ship, conditionName, flagTexture = null) {
   const { deck } = ship, st = CONDITION[conditionName];
@@ -208,76 +257,129 @@ export function buildShipView(ship, conditionName, flagTexture = null) {
   group.position.set(ship.x, 0, ship.y);
   const floating = new THREE.Group();
   group.add(floating);
-  const wood = mat(st.wood);
+  const woodColor = new THREE.Color(st.wood);
+  const wood = mat(woodColor, { side: THREE.DoubleSide }), planks = mat(woodColor.clone().multiplyScalar(1.6), { side: THREE.DoubleSide });
+  const pale = mat(woodColor.clone().multiplyScalar(1.3));
+  const { w, h } = deck.size, cy = h / 2, c = deck.cabin, cl = c.x1 - c.x0, cw = c.y1 - c.y0, mid = (c.x0 + c.x1) / 2;
+  const box = (sx, sy, sz, x, y, z, material = wood) => { const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), material); m.position.set(x, y, z); return m; };
+  const hullG = new THREE.Group(), holdG = new THREE.Group(), deckG = new THREE.Group(), propsG = new THREE.Group(), cabinG = new THREE.Group(), helmG = new THREE.Group(), quartersG = new THREE.Group();
+  floating.add(hullG, holdG, deckG, propsG, cabinG, helmG, quartersG);
+  const inner = insetPolygon(deck.hull, 0.5);
+  const helmY = DECK_Y + HELM_RISE;
 
-  floating.add(new THREE.Mesh(hullGeometry(deck.hull), wood));
-  floating.add(new THREE.Mesh(railGeometry(deck.hull), mat(new THREE.Color(st.wood).multiplyScalar(0.8))));
+  // the hull: a shell with the hold inside it, and the rail on top
+  hullG.add(new THREE.Mesh(shellGeometry(deck.hull), wood), new THREE.Mesh(railGeometry(deck.hull), mat(woodColor.clone().multiplyScalar(0.8), { side: THREE.DoubleSide })));
+  hullG.add(new THREE.Mesh(floorGeometry(inner, HOLD_Y), mat(woodColor.clone().multiplyScalar(0.7), { side: THREE.DoubleSide })));
 
-  // the deck planks: one dark plane under the rooms
-  const plank = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape(insetPolygon(deck.hull, 0.35).map((p) => new THREE.Vector2(p.x, p.y)))), mat(new THREE.Color(st.wood).multiplyScalar(1.15), { side: THREE.DoubleSide }));
-  plank.rotation.x = Math.PI / 2;
-  plank.position.y = DECK_Y + 0.02;
-  floating.add(plank);
-
-  // rooms (files) and walls (folders), one draw call each
-  const files = deck.cells.filter((c) => c.file !== null), dirs = deck.cells.filter((c) => c.file === null);
+  // ---- the hold: rooms (files), walls (folders), and the cracks with a beam each ----
+  const files = deck.cells.filter((cell) => cell.file !== null), dirs = deck.cells.filter((cell) => cell.file === null);
   const rooms = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat(0xffffff), Math.max(1, files.length));
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), one = new THREE.Vector3();
-  files.forEach((c, i) => {
-    const r = c.rect;
-    m4.compose(one.set(r.x + r.w / 2, DECK_Y + 0.07, r.y + r.h / 2), q, new THREE.Vector3(Math.max(r.w - 0.06, 0.02), 0.12, Math.max(r.h - 0.06, 0.02)));
+  files.forEach((cell, i) => {
+    const r = cell.rect;
+    m4.compose(one.set(r.x + r.w / 2, HOLD_Y + 0.07, r.y + r.h / 2), q, new THREE.Vector3(Math.max(r.w - 0.06, 0.02), 0.12, Math.max(r.h - 0.06, 0.02)));
     rooms.setMatrixAt(i, m4);
-    rooms.setColorAt(i, extColor(c.label, c.depth));
+    rooms.setColorAt(i, extColor(cell.label, cell.depth));
   });
   rooms.count = files.length;
   rooms.instanceMatrix.needsUpdate = true;
   if (rooms.instanceColor) rooms.instanceColor.needsUpdate = true;
-  floating.add(rooms);
   const walls = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat(0x3a2a1c), Math.max(1, dirs.length * 4));
-  let w = 0;
-  const wall = (x, z, sx, sz) => { m4.compose(one.set(x, DECK_Y + 0.28, z), q, new THREE.Vector3(sx, 0.5, sz)); walls.setMatrixAt(w++, m4); };
-  for (const c of dirs) {
-    const r = c.rect, t = 0.1;
+  let wn = 0;
+  const wall = (x, z, sx, sz) => { m4.compose(one.set(x, HOLD_Y + 0.3, z), q, new THREE.Vector3(sx, 0.5, sz)); walls.setMatrixAt(wn++, m4); };
+  for (const cell of dirs) {
+    const r = cell.rect, t = 0.1;
     wall(r.x + r.w / 2, r.y, r.w, t); wall(r.x + r.w / 2, r.y + r.h, r.w, t); wall(r.x, r.y + r.h / 2, t, r.h); wall(r.x + r.w, r.y + r.h / 2, t, r.h);
   }
-  walls.count = w;
+  walls.count = wn;
   walls.instanceMatrix.needsUpdate = true;
-  floating.add(walls);
-
-  // cracks: a dark gap with a glowing seam, and a beam above each so that they are seen from across the deck
-  const gap = [], seam = [], beams = new THREE.Group();
+  holdG.add(rooms, walls);
+  const gap = [], seam = [];
   const ribbon = (pts, width, y, out) => {
     for (let i = 0; i + 1 < pts.length; i++) {
-      const a = pts[i], b = pts[i + 1], dx = b.x - a.x, dz = b.y - a.y, len = Math.hypot(dx, dz) || 1, nx = (-dz / len) * width / 2, nz = (dx / len) * width / 2;
-      out.push(a.x + nx, y, a.y + nz, a.x - nx, y, a.y - nz, b.x + nx, y, b.y + nz, b.x + nx, y, b.y + nz, a.x - nx, y, a.y - nz, b.x - nx, y, b.y - nz);
+      const a2 = pts[i], b2 = pts[i + 1], dx = b2.x - a2.x, dz = b2.y - a2.y, len = Math.hypot(dx, dz) || 1, nx = (-dz / len) * width / 2, nz = (dx / len) * width / 2;
+      out.push(a2.x + nx, y, a2.y + nz, a2.x - nx, y, a2.y - nz, b2.x + nx, y, b2.y + nz, b2.x + nx, y, b2.y + nz, a2.x - nx, y, a2.y - nz, b2.x - nx, y, b2.y - nz);
     }
   };
   const beamMat = new THREE.MeshBasicMaterial({ color: PALETTE.gold, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false });
-  const beamMeshes = [];
-  deck.cracks.forEach((c) => {
-    ribbon(c.pts, c.width * 1.8, DECK_Y + 0.15, gap); ribbon(c.branch, c.width * 1.1, DECK_Y + 0.15, gap);
-    ribbon(c.pts, c.width, DECK_Y + 0.17, seam); ribbon(c.branch, c.width * 0.6, DECK_Y + 0.17, seam);
-    const b = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 4, 6, 1, true), beamMat);
-    b.position.set(c.pts[0].x, DECK_Y + 2.1, c.pts[0].y);
-    beams.add(b); beamMeshes.push(b);
+  const beamMeshes = [], beams = new THREE.Group();
+  deck.cracks.forEach((cr) => {
+    ribbon(cr.pts, cr.width * 1.8, HOLD_Y + 0.15, gap); ribbon(cr.branch, cr.width * 1.1, HOLD_Y + 0.15, gap);
+    ribbon(cr.pts, cr.width, HOLD_Y + 0.17, seam); ribbon(cr.branch, cr.width * 0.6, HOLD_Y + 0.17, seam);
+    const b2 = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 3.4, 6, 1, true), beamMat);
+    b2.position.set(cr.pts[0].x, HOLD_Y + 1.8, cr.pts[0].y);
+    beams.add(b2); beamMeshes.push(b2);
   });
-  const ribbonMesh = (verts, material) => {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-    return new THREE.Mesh(g, material);
-  };
-  floating.add(ribbonMesh(gap, new THREE.MeshBasicMaterial({ color: 0x050404, side: THREE.DoubleSide })));
+  const ribbonMesh = (verts, material) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3)); return new THREE.Mesh(g, material); };
   const seamMat = new THREE.MeshBasicMaterial({ color: 0xff7a2f, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false });
-  floating.add(ribbonMesh(seam, seamMat));
-  floating.add(beams);
-  // the ring that shows which crack he is next to
+  holdG.add(ribbonMesh(gap, new THREE.MeshBasicMaterial({ color: 0x050404, side: THREE.DoubleSide })), ribbonMesh(seam, seamMat), beams);
   const ring = new THREE.Mesh(new THREE.TorusGeometry(0.9, 0.05, 6, 24), new THREE.MeshBasicMaterial({ color: PALETTE.gold }));
   ring.rotation.x = Math.PI / 2;
   ring.visible = false;
-  floating.add(ring);
+  holdG.add(ring);
+  // the ladder up to the hatch
+  const ladder = deck.station('ladder');
+  for (const dz of [-0.3, 0.3]) holdG.add(box(0.08, DECK_Y - HOLD_Y, 0.08, ladder.x, (DECK_Y + HOLD_Y) / 2, ladder.y - 0.55 + dz));
+  for (let i = 0; i < 9; i++) holdG.add(box(0.06, 0.06, 0.7, ladder.x, HOLD_Y + 0.4 + i * 0.5, ladder.y - 0.55));
 
-  // the mast, the yard and the sail (what state it is in tells the condition)
-  const cy = deck.size.h / 2, mx = deck.size.w * 0.42;
+  // ---- the main deck: planks with the hatch hole, its frame, and a glow that comes up out of the hold ----
+  const hatch = deck.hatch;
+  deckG.add(new THREE.Mesh(floorGeometry(inner, DECK_Y, [{ x: hatch.x, y: hatch.y, size: 2.4 }]), planks));
+  for (const [sx, sz, x, z] of [[2.8, 0.2, hatch.x, hatch.y - 1.3], [2.8, 0.2, hatch.x, hatch.y + 1.3], [0.2, 2.4, hatch.x - 1.3, hatch.y], [0.2, 2.4, hatch.x + 1.3, hatch.y]]) propsG.add(box(sx, 0.3, sz, x, DECK_Y + 0.15, z, pale));
+  const leak = new THREE.Mesh(new THREE.PlaneGeometry(2.3, 2.3), new THREE.MeshBasicMaterial({ color: 0xff7a2f, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+  leak.rotation.x = Math.PI / 2;
+  leak.position.set(hatch.x, DECK_Y - 0.6, hatch.y);
+  deckG.add(leak);
+
+  // ---- the quarters: walls (a door in the bow side), and the helm on the roof ----
+  const wallH = HELM_RISE - 0.25;
+  cabinG.add(box(0.25, wallH, cw, c.x0, DECK_Y + wallH / 2, cy, pale), box(cl, wallH, 0.25, mid, DECK_Y + wallH / 2, c.y0, pale), box(cl, wallH, 0.25, mid, DECK_Y + wallH / 2, c.y1, pale));
+  const side = (cw - 1.8) / 2;
+  cabinG.add(box(0.25, wallH, side, c.x1, DECK_Y + wallH / 2, c.y0 + side / 2, pale), box(0.25, wallH, side, c.x1, DECK_Y + wallH / 2, c.y1 - side / 2, pale), box(0.25, wallH - 2.1, 1.8, c.x1, DECK_Y + 2.1 + (wallH - 2.1) / 2, cy, pale));
+  helmG.add(box(cl + 0.8, 0.25, cw + 0.8, mid - 0.1, helmY - 0.125, cy, planks));
+  const stairsX = deck.station('stairsUp').x;
+  const rail = (sx, sz, x, z) => helmG.add(box(sx, 0.9, sz, x, helmY + 0.45, z, wood));
+  rail(0.12, cw + 0.8, c.x0 - 0.5, cy); rail(0.12, cw + 0.8, c.x1 + 0.3, cy); rail(cl + 0.8, 0.12, mid - 0.1, c.y1 + 0.4);
+  const gapW = 2.4, leftLen = stairsX - gapW / 2 - (c.x0 - 0.5), rightLen = (c.x1 + 0.3) - (stairsX + gapW / 2);
+  rail(leftLen, 0.12, (c.x0 - 0.5) + leftLen / 2, c.y0 - 0.4); rail(rightLen, 0.12, stairsX + gapW / 2 + rightLen / 2, c.y0 - 0.4);
+  const wheelSt = deck.station('wheel');
+  const helm = new THREE.Group();
+  helm.add(box(0.3, 1.1, 0.3, 0, 0.55, 0, mat(0x4a3320)));
+  const wheel = new THREE.Group();
+  wheel.add(new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.06, 6, 20), mat(0x6a4a2c)));
+  for (let i = 0; i < 8; i++) { const sp = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.6, 4), mat(0x6a4a2c)); sp.rotation.z = (i / 8) * Math.PI; wheel.add(sp); }
+  wheel.rotation.y = Math.PI / 2;
+  wheel.position.set(0.2, 1.35, 0);
+  helm.add(wheel);
+  helm.position.set(wheelSt.x, helmY, wheelSt.y);
+  helmG.add(helm);
+  // the stairs up from the deck on the port side
+  for (let i = 0; i < 6; i++) propsG.add(box(1.8, (i + 1) * (HELM_RISE / 6), 0.55, stairsX, DECK_Y + ((i + 1) * (HELM_RISE / 6)) / 2, c.y0 - 3.3 + (i + 0.5) * 0.55, planks));
+
+  // ---- inside the quarters: a desk with a candle, a chair, a shelf of books, a rug, and three frames for the top contributors ----
+  const desk = deck.station('desk');
+  quartersG.add(box(1.0, 0.1, 2.2, c.x0 + 0.9, DECK_Y + 0.85, cy, mat(0x6a4a2c)), box(0.9, 0.85, 0.12, c.x0 + 0.9, DECK_Y + 0.42, cy - 1.0, mat(0x4a3320)), box(0.9, 0.85, 0.12, c.x0 + 0.9, DECK_Y + 0.42, cy + 1.0, mat(0x4a3320)));
+  quartersG.add(box(0.5, 0.1, 0.5, desk.x + 0.7, DECK_Y + 0.5, cy, mat(0x5a3d24)), box(0.1, 0.6, 0.5, desk.x + 0.95, DECK_Y + 0.8, cy, mat(0x5a3d24)));
+  const candle = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.25, 8), new THREE.MeshBasicMaterial({ color: 0xffe2a8 }));
+  candle.position.set(c.x0 + 0.9, DECK_Y + 1.03, cy + 0.6);
+  quartersG.add(candle);
+  quartersG.add(box(cl - 2.2, 0.08, 0.4, mid + 0.4, DECK_Y + 1.5, c.y1 - 0.35, mat(0x4a3320)));
+  const bookColors = [0x7a2f3a, 0x2f5a7a, 0x4a7a3a, 0xd19a66, 0x6a4a8a, 0x8a5a3a];
+  for (let i = 0; i < 9; i++) quartersG.add(box(0.14, 0.4 + 0.08 * (i % 3), 0.3, c.x0 + 2.2 + i * 0.2, DECK_Y + 1.75, c.y1 - 0.35, mat(bookColors[i % bookColors.length])));
+  const rug = new THREE.Mesh(new THREE.CircleGeometry(1.6, 24), mat(0x7a2f3a, { side: THREE.DoubleSide }));
+  rug.rotation.x = Math.PI / 2;
+  rug.position.set(mid + 0.5, DECK_Y + 0.03, cy);
+  quartersG.add(rug);
+  const frames = [-2, 0, 2].map((dy) => {
+    const f = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 1.1), new THREE.MeshBasicMaterial({ color: 0x3a2a1c, side: THREE.DoubleSide }));
+    f.position.set(c.x0 + 0.16, DECK_Y + 1.9, cy + dy);
+    f.rotation.y = Math.PI / 2;
+    quartersG.add(f);
+    return f;
+  });
+
+  // ---- on the main deck: the mast and sail (what state it is in tells the condition), the flag and the tavern table ----
+  const mx = w * 0.42;
   if (conditionName !== 'wreck') {
     const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 17, 8), mat(0x4a3320));
     mast.position.set(mx, DECK_Y + 8.5, cy);
@@ -287,53 +389,55 @@ export function buildShipView(ship, conditionName, flagTexture = null) {
     const sail = new THREE.Mesh(new THREE.PlaneGeometry(9 * st.sailW + 0.001, 9 * st.sailH + 0.001), mat(st.sail, { side: THREE.DoubleSide, transparent: true, opacity: 0.93 }));
     sail.rotation.y = Math.PI / 2;
     sail.position.set(mx + 0.2, DECK_Y + 15 - 4.5 * st.sailH, cy);
-    floating.add(mast, yard, sail);
+    propsG.add(mast, yard, sail);
   } else {
     const stump = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.32, 3.2, 8), mat(0x3a2a1c));
     stump.position.set(mx, DECK_Y + 1.6, cy);
     stump.rotation.z = 0.35;
-    floating.add(stump);
+    propsG.add(stump);
   }
-
-  // the stations
-  const [flagSt, tavernSt, wheelSt] = ['flag', 'tavern', 'wheel'].map((id) => deck.stations.find((s) => s.id === id));
+  const flagSt = deck.station('flag'), tavernSt = deck.station('tavern');
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 9, 6), mat(0xcccccc));
   pole.position.set(flagSt.x, DECK_Y + 4.5, flagSt.y);
   const cloth = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.2), new THREE.MeshBasicMaterial({ map: flagTexture, color: flagTexture ? 0xffffff : conditionColor(conditionName), side: THREE.DoubleSide }));
   cloth.position.set(flagSt.x, DECK_Y + 6, flagSt.y + 1.7);
   cloth.rotation.y = Math.PI / 2;
-  floating.add(pole, cloth);
+  propsG.add(pole, cloth);
   const table = new THREE.Group();
   table.add(new THREE.Mesh(new THREE.CylinderGeometry(0.95, 0.95, 0.1, 16), mat(0x6a4a2c)).translateY(0.95), new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.2, 0.95, 8), mat(0x4a3320)).translateY(0.47));
   for (let i = 0; i < 4; i++) {
-    const a = (i / 4) * Math.PI * 2, stool = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.5, 8), mat(0x5a3d24));
-    stool.position.set(Math.cos(a) * 1.5, 0.25, Math.sin(a) * 1.5);
+    const a2 = (i / 4) * Math.PI * 2, stool = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.5, 8), mat(0x5a3d24));
+    stool.position.set(Math.cos(a2) * 1.5, 0.25, Math.sin(a2) * 1.5);
     table.add(stool);
   }
   table.add(new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffd9a0 })).translateY(1.2));
   table.position.set(tavernSt.x, DECK_Y, tavernSt.y);
-  const helm = new THREE.Group();
-  helm.add(new THREE.Mesh(new THREE.BoxGeometry(0.3, 1.1, 0.3), mat(0x4a3320)).translateY(0.55));
-  const wheel = new THREE.Group();
-  wheel.add(new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.06, 6, 20), mat(0x6a4a2c)));
-  for (let i = 0; i < 8; i++) { const sp = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.6, 4), mat(0x6a4a2c)); sp.rotation.z = (i / 8) * Math.PI; wheel.add(sp); }
-  wheel.position.set(0, 1.35, 0.2);
-  helm.add(wheel);
-  helm.position.set(wheelSt.x, DECK_Y, wheelSt.y);
-  floating.add(table, helm);
-
-  // the name above her
+  propsG.add(table);
   const sign = textSprite([ship.repo.fullName, `${conditionName} - ${ship.repo.stars} stars${ship.repo.language ? ' - ' + ship.repo.language : ''}`], { color: ['#9cdef2', '#d19a66'], size: 56, width: 1200 });
-  if (sign) { sizeSprite(sign, 34); sign.position.set(mx, DECK_Y + 22, cy); floating.add(sign); }
+  if (sign) { sizeSprite(sign, 22); sign.position.set(mx, DECK_Y + 20, cy); propsG.add(sign); }
 
-  const state = { ring, flag: cloth, beams: beamMeshes, seamMat };
+  let level = null;
+  const setLevel = (l) => {
+    level = l;
+    holdG.visible = l === 'hold';
+    deckG.visible = l !== 'hold';
+    propsG.visible = l !== 'hold' && l !== 'quarters';
+    cabinG.visible = l !== 'hold';
+    helmG.visible = l !== 'hold' && l !== 'quarters';
+    quartersG.visible = l === 'quarters';
+  };
+  setLevel(null);
+
+  const state = { ring, flag: cloth, beams: beamMeshes, seamMat, frames, leak };
   return {
     group,
     deck,
     state,
+    setLevel,
+    get level() { return level; },
     /** Rides the water, makes the seams pulse, and shows which crack is near and which is being read. */
     update(t, nearCrack, readingIssue, starred) {
-      const cx = ship.x + deck.size.w / 2, cz = ship.y + deck.size.h / 2;
+      const cx = ship.x + w / 2, cz = ship.y + h / 2;
       const tilt = conditionName === 'wreck' ? 0.1 : 0;
       floating.position.y = waveHeight(cx, cz, t) * 0.6 - (conditionName === 'wreck' ? 0.9 : 0);
       floating.rotation.z = tilt + 0.012 * Math.sin(t * 0.9 + cx);
@@ -341,9 +445,21 @@ export function buildShipView(ship, conditionName, flagTexture = null) {
       const pulse = 0.55 + 0.45 * Math.sin(t * 3);
       seamMat.opacity = 0.55 + 0.4 * pulse;
       beamMat.opacity = 0.1 + 0.18 * pulse;
-      if (nearCrack >= 0) { const c = deck.cracks[nearCrack]; ring.visible = true; ring.position.set(c.pts[0].x, DECK_Y + 0.2, c.pts[0].y); } else ring.visible = false;
+      leak.material.opacity = deck.cracks.length ? Math.min(0.55, 0.12 + deck.cracks.length * 0.02) * (0.6 + 0.4 * pulse) : 0;
+      if (nearCrack >= 0) { const cr = deck.cracks[nearCrack]; ring.visible = true; ring.position.set(cr.pts[0].x, HOLD_Y + 0.2, cr.pts[0].y); } else ring.visible = false;
       cloth.position.y = DECK_Y + (starred ? 6 : 3.4) + 0.12 * Math.sin(t * 2.5);
-      beamMeshes.forEach((b, i) => { b.visible = readingIssue === null || deck.cracks[i].issue !== readingIssue || (Math.floor(t * 4) % 2 === 0); });
+      beamMeshes.forEach((b2, i) => { b2.visible = readingIssue === null || deck.cracks[i].issue !== readingIssue || (Math.floor(t * 4) % 2 === 0); });
+    },
+    /** Hangs the top contributors in the three frames of the quarters (pictures from GitHub only). */
+    setPortraits(urls) {
+      if (typeof document === 'undefined') return;
+      urls.slice(0, 3).forEach((url, i) => {
+        if (!url || !frames[i]) return;
+        new THREE.TextureLoader().setCrossOrigin('anonymous').load(`${url}${url.includes('?') ? '&' : '?'}s=128`, (tex) => {
+          tex.colorSpace = THREE.SRGBColorSpace;
+          frames[i].material.map = tex; frames[i].material.color.set(0xffffff); frames[i].material.needsUpdate = true;
+        }, undefined, () => { /* no picture: the frame stays empty */ });
+      });
     },
     dispose() {
       group.traverse((o) => { o.geometry?.dispose?.(); if (o.material) [].concat(o.material).forEach((m) => m.dispose?.()); });
@@ -457,7 +573,7 @@ export class LabelPool {
 export class RoomLabels {
   constructor(parent, n = 28) { this.group = new THREE.Group(); parent.add(this.group); this.n = n; this.pool = new Map(); }
 
-  update(ship, local, time, y) {
+  update(ship, local, time, baseY) {
     if (typeof document === 'undefined') return;
     const near = ship.deck.cells
       .filter((c) => c.file !== null && Math.abs(c.rect.x + c.rect.w / 2 - local.x) < 22 && Math.abs(c.rect.y + c.rect.h / 2 - local.y) < 22 && c.rect.w > 1.6 && c.rect.h > 0.9)
@@ -474,7 +590,7 @@ export class RoomLabels {
         this.pool.set(c.file, s);
       }
       s.visible = true;
-      s.position.set(ship.x + c.rect.x + c.rect.w / 2, y + DECK_Y + 0.5, ship.y + c.rect.y + c.rect.h / 2);
+      s.position.set(ship.x + c.rect.x + c.rect.w / 2, baseY + 0.6, ship.y + c.rect.y + c.rect.h / 2);
     }
   }
 }

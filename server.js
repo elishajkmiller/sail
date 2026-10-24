@@ -28,7 +28,7 @@ export function serve(req, res) {
   const type = TYPES[path.extname(file)] || 'application/octet-stream';
   res.writeHead(200, {
     'Content-Type': type, 'Content-Security-Policy': CSP, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
-    'Cache-Control': file.endsWith('.html') ? 'no-cache' : 'public, max-age=300',
+    'Cache-Control': file.includes(`${path.sep}vendor${path.sep}`) ? 'public, max-age=86400' : 'no-cache',
   });
   if (req.method === 'HEAD') return res.end();
   fs.createReadStream(file).pipe(res);

@@ -94,3 +94,41 @@ test('the sea, the sky and the sailor build, and the water height is the shader 
   assert.deepEqual(extColor('a.rs').toArray().map((v) => +v.toFixed(3)), extColor('b/c.rs').toArray().map((v) => +v.toFixed(3)));
   assert.notDeepEqual(extColor('a.rs').toArray(), extColor('a.md').toArray());
 });
+
+test('the room labels take the height of the floor they stand on, and the storeys show and hide as they should', async () => {
+  const { RoomLabels } = await import('../public/js/scene.js');
+  const labels = new RoomLabels(new THREE.Scene());
+  assert.doesNotThrow(() => labels.update(ship().sea[0], { x: 5, y: 5 }, 0, -2.2), 'a label update needs no browser');
+  const g = ship();
+  const view = buildShipView(g.sea[0], 'sailing');
+  const groups = view.group.children[0].children; // hull, hold, deck, props, cabin, helm, quarters
+  const seen = () => groups.map((o) => o.visible ? 1 : 0).join('');
+  view.setLevel(null);
+  assert.equal(seen(), '1011110', 'from outside: hull, deck, props, cabin and helm');
+  view.setLevel('hold');
+  assert.equal(seen(), '1100000', 'in the hold: only the hull and the hold, cut away from above');
+  view.setLevel('deck');
+  assert.equal(seen(), '1011110');
+  view.setLevel('helm');
+  assert.equal(seen(), '1011110');
+  view.setLevel('quarters');
+  assert.equal(seen(), '1010101', 'in the quarters: the roof and the deck props are lifted off and the furniture shows');
+  assert.equal(view.level, 'quarters');
+  assert.equal(view.state.frames.length, 3);
+  assert.doesNotThrow(() => view.setPortraits(['https://avatars.githubusercontent.com/u/1', '', null]));
+});
+
+test('the sea is cut away in the shape of the hull while he is in the hold, and closed again after', async () => {
+  const { setSeaHole } = await import('../public/js/scene.js');
+  const sea = makeSea(), g = ship();
+  setSeaHole(sea, g.sea[0]);
+  const u = sea.material.uniforms;
+  assert.equal(u.uHoleOn.value, 1);
+  assert.ok(u.uHullN.value >= 20 && u.uHullN.value <= 24);
+  const pts = u.uHull.value.slice(0, u.uHullN.value);
+  const xs = pts.map((p) => p.x), zs = pts.map((p) => p.y);
+  assert.ok(Math.min(...xs) > g.sea[0].x - 4 && Math.max(...xs) > g.sea[0].x + g.sea[0].deck.size.w, 'the hole lies where the ship lies, bow past the end of the deck');
+  assert.ok(Math.min(...zs) > g.sea[0].y - 4 && Math.max(...zs) < g.sea[0].y + g.sea[0].deck.size.h + 4);
+  setSeaHole(sea, null);
+  assert.equal(u.uHoleOn.value, 0);
+});

@@ -50,13 +50,14 @@ test('the boat sails the way it points, keeps going, and the water slows it', ()
   assert.ok(Math.abs(g.boat.vx) < 5, 'the keel holds it against sliding sideways');
 });
 
-test('sailing over a hull lands on her by itself, and Space takes off again', () => {
+test('sailing over a hull lands on her by itself, on the main deck, and Space takes off again', () => {
   const g = fresh();
   g.step(0.02, { leave: true });
   assert.equal(g.aboard, null, 'open water: nothing to land on');
   run(g, { throttle: 1 }, 6);
   assert.equal(g.aboard, 0, 'no key was pressed');
-  assert.ok(g.human && g.sea[0].deck.contains({ x: g.human.x - g.sea[0].x, y: g.human.y - g.sea[0].y }, 0.6));
+  assert.equal(g.level, 'deck');
+  assert.ok(g.human && g.sea[0].deck.contains('deck', { x: g.human.x - g.sea[0].x, y: g.human.y - g.sea[0].y }));
   g.step(0.02, { leave: true });
   assert.ok(g.aboard === null && g.human === null && g.left.length === 1);
   run(g, none, 1);
@@ -73,22 +74,24 @@ test('sailing over a hull lands on her by itself, and Space takes off again', ()
   assert.equal(g.aboard, 0, 'and Space over the hull lands on purpose');
 });
 
-test('the guy walks the deck at walking pace and cannot walk off the ship', () => {
+test('the guy walks the deck at walking pace and cannot walk off the ship, or through the quarters', () => {
   const g = fresh();
-  g.board(0, { x: g.sea[0].x + 3, y: g.sea[0].y + 5 });
+  g.placeAt(0, 'deck', { x: 14, y: 5 });
   const x0 = g.human.x;
   run(g, { move: { x: 1, y: 0 } }, 1);
   assert.ok(Math.abs(g.human.x - x0 - WALK) < 0.3, `a second of walking is ${WALK} m: ${g.human.x - x0}`);
   run(g, { move: { x: 0, y: 1 }, boost: true }, 30);
   run(g, { move: { x: -1, y: 0 }, boost: true }, 60);
-  const m = g.sea[0];
-  assert.ok(m.deck.contains({ x: g.human.x - m.x, y: g.human.y - m.y }, 0.65), 'the rail stops him');
+  const m = g.sea[0], local = { x: g.human.x - m.x, y: g.human.y - m.y };
+  assert.ok(m.deck.contains('deck', local), 'the rail and the quarters stop him');
+  run(g, { move: { x: 0, y: -1 }, boost: true }, 5);
+  assert.ok(m.deck.contains('deck', { x: g.human.x - m.x, y: g.human.y - m.y }), 'walking at the quarters from the side does not go through them');
 });
 
-test('a crack beside him is read with E and closed with E or Escape', () => {
+test('a crack beside him in the hold is read with E and closed with E or Escape', () => {
   const g = fresh();
   const crack = g.sea[0].deck.cracks.find((c) => c.file !== null);
-  g.board(0, { x: g.sea[0].x + crack.pts[0].x, y: g.sea[0].y + crack.pts[0].y });
+  g.placeAt(0, 'hold', crack.pts[0]);
   g.step(0.02, none);
   assert.ok(g.nearCrack >= 0 && g.prompt.startsWith('E: read #4'), g.prompt);
   g.step(0.02, { interact: true });
@@ -98,51 +101,84 @@ test('a crack beside him is read with E and closed with E or Escape', () => {
   g.step(0.02, { interact: true });
   g.step(0.02, { esc: true });
   assert.equal(g.reading, null, 'Escape closes it too');
+  // the same place on the deck above has no cracks to read
+  g.placeAt(0, 'deck', { x: 15, y: 6 });
+  g.step(0.02, none);
+  assert.deepEqual([g.nearCrack, g.nearRoom], [-1, -1], 'the cracks and the rooms are in the hold');
 });
 
-test('E at a station asks for it, and E in a room asks for its file', () => {
+test('E at a station asks for it, E at a stair or hatch changes storey, and E in a room of the hold asks for its file', () => {
   const g = fresh();
   const d = g.sea[0].deck;
   g.events.length = 0;
   for (const s of d.stations) {
-    g.board(0, { x: g.sea[0].x + s.x, y: g.sea[0].y + s.y });
+    g.placeAt(0, s.level, s);
     g.step(0.02, none);
-    assert.equal(g.nearStation.id, s.id);
-    assert.match(g.prompt, /^E: /);
+    assert.equal(g.nearStation.id, s.id, s.id);
+    assert.match(g.prompt, /^E: /, s.id);
     g.step(0.02, { interact: true });
-    assert.deepEqual(g.events.at(-1), { type: 'station', ship: 0, id: s.id });
+    if (s.to) {
+      assert.equal(g.level, s.to.level, `${s.id} leads to ${s.to.level}`);
+      assert.deepEqual(g.events.at(-1), { type: 'level', ship: 0, level: s.to.level });
+    } else assert.deepEqual(g.events.at(-1), { type: 'station', ship: 0, id: s.id });
   }
   const main = FILES.findIndex((f) => f[0] === 'src/main.rs');
   const c = d.cells[d.fileCell.get(main)].rect;
   g.sea[0].deck.cracks.length = 0;
-  g.board(0, { x: g.sea[0].x + c.x + c.w / 2, y: g.sea[0].y + c.y + c.h / 2 });
+  g.placeAt(0, 'hold', { x: c.x + c.w / 2, y: c.y + c.h / 2 });
   g.step(0.02, none);
   assert.equal(g.prompt, 'E: open src/main.rs');
   g.step(0.02, { interact: true });
   assert.deepEqual(g.events.at(-1), { type: 'file', ship: 0, file: main });
 });
 
-test('clicking an issue in the bar boards the ship and walks to its crack to read it', () => {
+test('the whole way round: deck, down the hatch, up the ladder, up to the helm, into the quarters, and out', () => {
+  const g = fresh();
+  const d = g.sea[0].deck, press = () => { g.step(0.02, none); g.step(0.02, { interact: true }); };
+  g.board(0, { x: g.sea[0].x + d.spawn.x, y: g.sea[0].y + d.spawn.y });
+  const go = (id) => { const s = d.station(id); g.placeAt(0, s.level, s); press(); };
+  go('hatch'); assert.equal(g.level, 'hold');
+  go('ladder'); assert.equal(g.level, 'deck');
+  go('stairsUp'); assert.equal(g.level, 'helm');
+  go('stairsDown'); assert.equal(g.level, 'deck');
+  go('door'); assert.equal(g.level, 'quarters');
+  go('out'); assert.equal(g.level, 'deck');
+  g.step(0.02, { leave: true });
+  assert.equal(g.aboard, null, 'and Space takes off from any storey');
+  g.placeAt(0, 'helm', d.station('wheel'));
+  g.step(0.02, { leave: true });
+  assert.ok(g.aboard === null && g.human === null, 'even from the helm');
+});
+
+test('clicking an issue in the bar goes down to the hold and walks to its crack to read it', () => {
   const g = fresh();
   g.walkToIssue(0);
   assert.equal(g.aboard, 0);
+  assert.equal(g.level, 'hold', 'the cracks are in the hold');
   assert.equal(g.walkTo.read, 0);
   run(g, none, 40);
   assert.deepEqual(g.reading, { ship: 0, issue: 0 });
   assert.equal(g.walkTo, null);
+  g.placeAt(0, 'helm', g.sea[0].deck.station('wheel'));
+  g.reading = null;
+  g.walkToIssue(1);
+  assert.equal(g.level, 'hold', 'from the helm too');
 });
 
-test('a click walks him there; a double click at sea boards a ship', () => {
+test('a click walks him there on his own storey; a double click at sea boards a ship', () => {
   const g = fresh();
   const m = g.sea[0];
   g.click({ x: m.x + 20, y: m.y + 10 }, false);
   assert.deepEqual([g.aboard, g.focus], [null, 0], 'one click only picks her');
   g.click({ x: m.x + 20, y: m.y + 10 }, true);
   assert.equal(g.aboard, 0);
+  assert.equal(g.level, 'deck');
   g.click({ x: m.x + 22, y: m.y + 10 }, false);
   assert.deepEqual([g.walkTo.x, g.walkTo.y], [22, 10]);
   g.click({ x: m.x - 500, y: m.y }, false);
   assert.deepEqual([g.walkTo.x, g.walkTo.y], [22, 10], 'a click in the water does nothing');
+  g.click({ x: m.x + 0, y: m.y + m.deck.size.h / 2 }, false);
+  assert.deepEqual([g.walkTo.x, g.walkTo.y], [22, 10], 'nor does one on the quarters, which are not the deck');
 });
 
 // two ships whose hulls overlap, as they do on a crowded sea: B laid across A's bow
@@ -225,18 +261,18 @@ test('when her issues change, her cracks are made again and the reading card is 
 
 test('standing at a station it is the station that E uses, even with a crack in reach', () => {
   const g = fresh();
-  const s = g.sea[0], flag = s.deck.stations[0];
-  // a crack 1 m from the flag, in reach of someone standing at it
-  s.deck.cracks.push({ issue: 0, file: null, pts: [{ x: flag.x - 1, y: flag.y }, { x: flag.x - 1.6, y: flag.y }], branch: [], width: 0.2 });
-  g.board(0, { x: s.x + flag.x, y: s.y + flag.y });
+  const s = g.sea[0], ladder = s.deck.station('ladder');
+  // a crack 1 m from the ladder, in reach of someone standing at it
+  s.deck.cracks.push({ issue: 0, file: null, pts: [{ x: ladder.x - 1, y: ladder.y }, { x: ladder.x - 1.6, y: ladder.y }], branch: [], width: 0.2 });
+  g.placeAt(0, 'hold', ladder);
   g.events.length = 0;
   g.step(0.02, none);
   assert.ok(g.nearCrack >= 0, 'the crack is in reach');
-  assert.match(g.prompt, /^E: the flag/);
+  assert.match(g.prompt, /^E: climb up/);
   g.step(0.02, { interact: true });
-  assert.deepEqual(g.events.at(-1), { type: 'station', ship: 0, id: 'flag' });
+  assert.equal(g.level, 'deck');
   assert.equal(g.reading, null);
-  g.board(0, { x: s.x + flag.x - 2.4, y: s.y + flag.y });
+  g.placeAt(0, 'hold', { x: ladder.x - 2.6, y: ladder.y });
   g.step(0.02, none);
   assert.match(g.prompt, /^E: read #/, 'a little way off, the crack is what is there');
 });

@@ -2,11 +2,16 @@
 // cracks and stations. The renderer (scene.js) and the page (main.js) read this state; the tests drive it with plain numbers.
 // Everything is in metres on a flat sea (x, y); the renderer puts y on the depth axis.
 
-import { Deck, hullDepth, MARGIN, RAIL } from './deck.js';
+import { Deck, hullDepth, MARGIN } from './deck.js';
 import { condition } from './github.js';
 
 export const WALK = 6;
 export const REACH = 2.2;
+const PROMPTS = {
+  flag: 'E: the flag (star this repo)', tavern: 'E: the tavern table (discussions)', wheel: 'E: the wheel (manage this repo)', desk: "E: the captain's desk (the owner and the top contributors)",
+  hatch: 'E: climb down into the hold (the cracks are there)', ladder: 'E: climb up to the deck', door: "E: go into the captain's quarters", out: 'E: out to the deck',
+  stairsUp: 'E: climb to the helm', stairsDown: 'E: down to the deck',
+};
 export const STATION_REACH = 1.8;
 export const BOAT_TOP = 30;
 const BOAT_ACC = 12;
@@ -95,18 +100,27 @@ export class Game {
 
   local(i, p) { const m = this.sea[i]; return { x: p.x - m.x, y: p.y - m.y }; }
 
-  /** Becomes the guy on a ship's deck, at a place (world) kept on the deck. */
-  board(i, p) {
+  /** Puts him aboard a ship on a storey, at a place of the ship's own coordinates (kept where that storey can be stood on). */
+  placeAt(i, level, local) {
     const m = this.sea[i];
-    const at = m.deck.clamp(this.local(i, p));
-    this.human = { x: m.x + at.x, y: m.y + at.y, face: 0 };
+    if (!m) return;
+    const at = m.deck.clamp(level, local);
+    this.human = { x: m.x + at.x, y: m.y + at.y, face: this.human?.face ?? 0, level };
     Object.assign(this.boat, { x: this.human.x, y: this.human.y, vx: 0, vy: 0 });
     this.aboard = i;
     this.left = [];
     this.focus = i;
     this.walkTo = null;
+    this.reading = null;
+  }
+
+  /** Becomes the guy on a ship's main deck, at a place (world) kept on the deck. */
+  board(i, p) {
+    this.placeAt(i, 'deck', this.local(i, p));
     this.events.push({ type: 'boarded', ship: i });
   }
+
+  get level() { return this.human?.level ?? null; }
 
   /** Space: aboard, back into the boat where he stands (it is not landed again on a ship whose hull it left); at sea over a hull, aboard. */
   toggleBoard() {
@@ -129,7 +143,12 @@ export class Game {
   walkToIssue(n) {
     const f = this.focus;
     if (f === null || !this.sea[f]) return;
-    if (this.aboard !== f) this.board(f, this.shipUnder(this.boat) === f ? this.boat : { x: this.sea[f].x + this.sea[f].deck.spawn.x, y: this.sea[f].y + this.sea[f].deck.spawn.y });
+    if (this.aboard !== f || this.level !== 'hold') {
+      // the cracks are in the hold: down the ladder, beside it
+      const ladder = this.sea[f].deck.station('ladder');
+      this.placeAt(f, 'hold', { x: ladder.x, y: ladder.y + 0.9 });
+      this.events.push({ type: 'boarded', ship: f }, { type: 'level', ship: f, level: 'hold' });
+    }
     const crack = this.sea[f].deck.cracks.find((c) => c.issue === n);
     if (crack) this.walkTo = { ship: f, x: crack.pts[0].x, y: crack.pts[0].y, read: n };
     else this.reading = { ship: f, issue: n };
@@ -177,7 +196,7 @@ export class Game {
     } else this.walkTo = null;
     if (!dir) return;
     const speed = WALK * (input.boost ? 2 : 1) * dt;
-    const next = m.deck.clamp({ x: local.x + dir.x * speed, y: local.y + dir.y * speed });
+    const next = m.deck.clamp(h.level, { x: local.x + dir.x * speed, y: local.y + dir.y * speed });
     if (this.walkTo && Math.hypot(next.x - local.x, next.y - local.y) < 1e-4) this.walkTo = null; // blocked by the rail
     h.x = m.x + next.x; h.y = m.y + next.y;
     h.face = Math.atan2(dir.y, dir.x);
@@ -224,13 +243,13 @@ export class Game {
     if (this.aboard !== null && this.human) {
       const m = this.sea[this.aboard];
       if (!m) return;
-      const p = this.local(this.aboard, this.human);
-      this.nearCrack = m.deck.crackNear(p, REACH);
+      const p = this.local(this.aboard, this.human), level = this.human.level;
       // (at a station it is the station, even where a crack is also within reach)
-      this.nearStation = m.deck.stationNear(p, STATION_REACH);
-      this.nearRoom = m.deck.roomAt(p);
+      this.nearStation = m.deck.stationNear(level, p, STATION_REACH);
+      // the cracks and the rooms (the files) are in the hold
+      if (level === 'hold') { this.nearCrack = m.deck.crackNear(p, REACH); this.nearRoom = m.deck.roomAt(p); }
       if (this.reading) this.prompt = 'E: close';
-      else if (this.nearStation) this.prompt = { flag: 'E: the flag (star this repo)', tavern: 'E: the tavern table (discussions)', wheel: 'E: the wheel (manage this repo)' }[this.nearStation.id];
+      else if (this.nearStation) this.prompt = PROMPTS[this.nearStation.id];
       else if (this.nearCrack >= 0) { const issue = m.issues[m.deck.cracks[this.nearCrack].issue]; this.prompt = `E: read #${issue.number} ${issue.title}`; }
       else if (this.nearRoom >= 0) this.prompt = `E: open ${m.files[m.deck.cells[this.nearRoom].file][0]}`;
       else this.prompt = 'Space: back to your boat';
@@ -245,7 +264,11 @@ export class Game {
     if (this.reading) { this.reading = null; return; }
     if (this.aboard === null) return;
     const m = this.sea[this.aboard];
-    if (this.nearStation) this.events.push({ type: 'station', ship: this.aboard, id: this.nearStation.id });
+    if (this.nearStation?.to) {
+      const to = this.nearStation.to;
+      this.placeAt(this.aboard, to.level, { x: to.x, y: to.y });
+      this.events.push({ type: 'level', ship: this.aboard, level: to.level });
+    } else if (this.nearStation) this.events.push({ type: 'station', ship: this.aboard, id: this.nearStation.id });
     else if (this.nearCrack >= 0) this.reading = { ship: this.aboard, issue: m.deck.cracks[this.nearCrack].issue };
     else if (this.nearRoom >= 0) this.events.push({ type: 'file', ship: this.aboard, file: m.deck.cells[this.nearRoom].file });
   }
@@ -255,9 +278,9 @@ export class Game {
     if (this.aboard !== null) {
       const m = this.sea[this.aboard];
       const local = this.local(this.aboard, p);
-      const c = m.deck.crackNear(local, 1.2);
+      const c = this.level === 'hold' ? m.deck.crackNear(local, 1.2) : -1;
       if (c >= 0) this.walkTo = { ship: this.aboard, x: m.deck.cracks[c].pts[0].x, y: m.deck.cracks[c].pts[0].y, read: m.deck.cracks[c].issue };
-      else if (m.deck.contains(local, RAIL)) this.walkTo = { ship: this.aboard, x: local.x, y: local.y, read: null };
+      else if (m.deck.contains(this.level, local, 0.1)) this.walkTo = { ship: this.aboard, x: local.x, y: local.y, read: null };
       return;
     }
     const i = this.shipUnder(p);

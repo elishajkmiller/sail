@@ -1,10 +1,11 @@
 # Ships
 
-Every public GitHub repo is a ship on a dusk sea. Sail your boat over a ship and you land on her deck as a sailor. Her files are the rooms of the deck, her folders are the walls, and every open issue is a glowing crack in the room it names (or in the hull, when it names no file). Three stations on every deck are the things developers do:
+Every public GitHub repo is a ship on a dusk sea. Sail your boat over a ship and you land on her main deck as a sailor. She has three storeys:
 
-- **the flag** stars the repo
-- **the tavern table** reads and joins her Discussions
-- **the wheel** manages issues and pull requests, when you may write to the repo
+- **the main deck** has the flag (star the repo), the tavern table (read and join her Discussions), the hatch down to the hold, the door of the captain's quarters and the stairs up to the helm
+- **the helm**, a raised platform at the stern, has the wheel: manage issues and pull requests, when you may write to the repo
+- **the captain's quarters**, under the helm, show the owner's profile and the top contributors (a desk, and their pictures in frames on the wall)
+- **the hold**, below deck, has her files as rooms and her folders as walls, and every open issue is a glowing crack in the room it names (or in the hull, when it names no file). The deck lifts away when you go down so you see the hold from above
 
 The ships around a ship are found live from the GitHub API: the people who starred her most recently, and what else they starred. The sea grows from where you have been, and it is kept in this browser. The ship you are standing on is kept live from her own event feed (stars, forks, issues, pushes), asked for once a minute.
 
@@ -19,7 +20,7 @@ Open source only (three.js is vendored in `public/vendor/`, MIT). No backend: th
 
 ## Keys
 
-Sailing: W S throttle, A D steer, Shift boost. On deck: W A S D walk (the way the camera faces), Shift run, click to walk, E to read a crack / use a station / open a file, Space to take off. Drag to look, wheel to zoom.
+Sailing: W S throttle, A D steer, Shift boost. Aboard: W A S D walk (the way the camera faces), Shift run, click to walk, E to use what is beside you (a station, a hatch, a ladder, stairs, a door, a crack to read, a room's file), Space to take off from any storey. Drag to look, wheel to zoom.
 
 ## Tokens
 
@@ -30,7 +31,7 @@ Reading needs nothing. A token raises the limits (60 to 5000 requests an hour) a
     public/js/util.js     small helpers, cleaning of text from GitHub
     public/js/github.js   everything asked of the API, scoring of neighbours
     public/js/treemap.js  the deck plan from file sizes
-    public/js/deck.js     hull, rooms, cracks, stations (metres)
+    public/js/deck.js     the storeys: hull, quarters, helm, rooms, cracks, stations (metres)
     public/js/atlas.js    the sea as found so far, placement of neighbours
     public/js/game.js     the rules (sail, land, walk, read)
     public/js/scene.js    three.js: sea, sky, ships, sailor

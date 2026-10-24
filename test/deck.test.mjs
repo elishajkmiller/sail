@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as treemap from '../public/js/treemap.js';
-import { Deck, deckSize, hullFor, hullContains, hullDepth, MARGIN, RAIL, crackDistance } from '../public/js/deck.js';
+import { Deck, deckSize, hullFor, hullContains, hullDepth, MARGIN, RAIL, HOLD_RAIL, LEVELS, levelY, DECK_Y, HOLD_Y, crackDistance } from '../public/js/deck.js';
 
 const area = (r) => r.w * r.h;
 const R = { x: 10, y: 20, w: 400, h: 300 };
@@ -58,37 +58,69 @@ test('a bigger repo is a longer ship, within limits', () => {
   assert.ok(Math.abs(s.h / s.w - 0.55) < 1e-9);
 });
 
-test('the hull holds the deck, and a point far away is put back aboard', () => {
+test('she has three storeys, and the hold is below the sea\'s surface line of the deck', () => {
+  assert.deepEqual(LEVELS, ['hold', 'deck', 'helm', 'quarters']);
+  assert.ok(levelY('hold') === HOLD_Y && levelY('deck') === DECK_Y && levelY('helm') > DECK_Y + 2 && levelY('quarters') === DECK_Y);
+  assert.ok(DECK_Y - HOLD_Y > 3.5, 'a person can stand up in the hold');
+});
+
+test('the deck is the hull less the captain\'s quarters, and a point far away is put back aboard', () => {
   const d = mk([]);
-  assert.ok(d.contains({ x: d.size.w / 2, y: d.size.h / 2 }) && d.contains(d.spawn));
-  assert.ok(d.contains({ x: 0, y: 0 }, 0.5) && d.contains({ x: d.size.w, y: d.size.h }, 0.5), 'the corners of the deck are inside the hull');
-  assert.ok(!d.contains({ x: -30, y: 10 }) && !d.contains({ x: d.size.w + 100, y: 0 }));
-  for (const far of [{ x: -400, y: 2 }, { x: d.size.w * 3, y: d.size.h / 2 }, { x: 15, y: 500 }, { x: 15, y: -500 }]) {
-    const q = d.clamp(far);
-    assert.ok(d.contains(q, RAIL - 0.01), `${JSON.stringify(far)} was put at ${JSON.stringify(q)}`);
+  const mid = { x: d.size.w * 0.5, y: d.size.h / 2 };
+  assert.ok(d.contains('deck', mid) && d.contains('deck', d.spawn));
+  assert.ok(!d.contains('deck', { x: -30, y: 10 }) && !d.contains('deck', { x: d.size.w + 100, y: 0 }));
+  for (const level of ['deck', 'hold']) for (const far of [{ x: -400, y: 2 }, { x: d.size.w * 3, y: d.size.h / 2 }, { x: 15, y: 500 }, { x: 15, y: -500 }]) {
+    const q = d.clamp(level, far);
+    assert.ok(d.contains(level, q), `${level}: ${JSON.stringify(far)} was put at ${JSON.stringify(q)}`);
   }
-  assert.deepEqual(d.clamp({ x: 5, y: 5 }), { x: 5, y: 5 });
+  assert.deepEqual(d.clamp('deck', mid), mid);
   assert.ok(d.bow.x > d.size.w, 'the bow reaches past the end of the deck');
-  assert.ok(hullDepth(d.hull, { x: d.size.w / 2, y: d.size.h / 2 }) > 5);
-  assert.ok(hullDepth(d.hull, { x: -100, y: 0 }) < 0);
 });
 
-test('every station is on the deck', () => {
+test('the quarters are a block at the stern that cannot be walked through, only along', () => {
+  const d = mk([]), c = d.cabin;
+  assert.ok(c.x0 < 0 && c.x1 < d.size.w * 0.2 && c.y0 > 0 && c.y1 < d.size.h, 'at the stern, between the sides');
+  const inside = { x: (c.x0 + c.x1) / 2, y: (c.y0 + c.y1) / 2 };
+  assert.ok(!d.contains('deck', inside), 'not on the deck');
+  const pushed = d.clamp('deck', inside);
+  assert.ok(d.contains('deck', pushed), 'pushed out to a side');
+  // walking at the front wall from the bow side: stopped at the wall, and the other coordinate is kept (a slide)
+  const into = d.clamp('deck', { x: c.x1 - 0.1, y: c.y0 + 1 });
+  assert.ok(into.x >= c.x1 && Math.abs(into.y - (c.y0 + 1)) < 0.01, JSON.stringify(into));
+  // the helm is the roof, the quarters the room: both stay inside the block
+  assert.ok(d.contains('helm', inside) && d.contains('quarters', inside));
+  assert.ok(!d.contains('helm', { x: c.x1 + 2, y: inside.y }) && !d.contains('quarters', { x: c.x0 - 2, y: inside.y }));
+  const out = d.clamp('quarters', { x: c.x1 + 20, y: inside.y });
+  assert.ok(d.contains('quarters', out) && out.x < c.x1);
+});
+
+test('every station is where its level can be stood on, and every stair leads to a place that can', () => {
   const d = mk([]);
-  assert.deepEqual(d.stations.map((s) => s.id), ['flag', 'tavern', 'wheel']);
-  for (const s of d.stations) assert.ok(d.contains(s, RAIL), s.id);
-  assert.equal(d.stationNear(d.stations[1], 1).id, 'tavern');
-  assert.equal(d.stationNear({ x: 20, y: 3 }, 2), null);
+  assert.deepEqual(d.stations.map((s) => s.id).sort(), ['desk', 'door', 'flag', 'hatch', 'ladder', 'out', 'stairsDown', 'stairsUp', 'tavern', 'wheel']);
+  for (const s of d.stations) {
+    assert.ok(d.contains(s.level, s), `${s.id} is on its level`);
+    if (s.to) assert.ok(d.contains(s.to.level, s.to), `${s.id} leads to a place on ${s.to.level}`);
+  }
+  assert.deepEqual(d.stationsOf('deck').map((s) => s.id).sort(), ['door', 'flag', 'hatch', 'stairsUp', 'tavern']);
+  assert.deepEqual(d.stationsOf('helm').map((s) => s.id).sort(), ['stairsDown', 'wheel']);
+  assert.deepEqual(d.stationsOf('quarters').map((s) => s.id).sort(), ['desk', 'out']);
+  assert.deepEqual(d.stationsOf('hold').map((s) => s.id), ['ladder']);
+  assert.equal(d.stationNear('deck', d.station('tavern'), 1).id, 'tavern');
+  assert.equal(d.stationNear('hold', d.station('tavern'), 1), null, 'a station is only on its own level');
+  // the way down and the way up meet
+  assert.equal(d.station('hatch').to.level, 'hold');
+  assert.equal(d.station('ladder').to.level, 'deck');
+  assert.ok(Math.hypot(d.station('ladder').to.x - d.hatch.x, d.station('ladder').to.y - d.hatch.y) < 4, 'up the ladder comes out beside the hatch');
 });
 
-test('rooms are found by where they are', () => {
+test('rooms are found by where they are, in the hold', () => {
   const d = mk([]);
   const i = d.fileCell.get(0), c = d.cells[i].rect;
   assert.equal(d.roomAt({ x: c.x + c.w / 2, y: c.y + c.h / 2 }), i);
   assert.equal(d.roomAt({ x: -3, y: -3 }), -1, 'the hull is not a room');
 });
 
-test('every place an issue touches is cracked, and one that names no file cracks the hull', () => {
+test('every place an issue touches is cracked, in the hold, and one that names no file cracks the hull', () => {
   const issues = [issue(4, ['src/main/java/A.java', 'README.md']), issue(5, []), issue(6, ['no/such/file.rs'])];
   const d = mk(issues);
   assert.equal(d.cracks.length, 4, 'two rooms for #4, the hull for #5 and for #6 (its file is not on the ship)');
@@ -99,11 +131,10 @@ test('every place an issue touches is cracked, and one that names no file cracks
     assert.ok(s.x >= r.x - 0.01 && s.x <= r.x + r.w + 0.01 && s.y >= r.y - 0.01 && s.y <= r.y + r.h + 0.01, 'the crack begins in its room');
   }
   for (const c of d.cracks.filter((c) => c.file === null)) {
-    assert.ok(c.pts[0].y < 0 || c.pts[0].y > d.size.h, 'a hull crack is along the side, not on the deck');
-    assert.ok(d.contains(c.pts[0]), 'and on the ship');
+    assert.ok(c.pts[0].y < 0 || c.pts[0].y > d.size.h, 'a hull crack is along the side, not among the rooms');
+    assert.ok(d.contains('hold', c.pts[0]), 'and where he can walk in the hold');
   }
-  const again = mk(issues);
-  assert.deepEqual(d.cracks.map((c) => c.pts), again.cracks.map((c) => c.pts), 'the same cracks every time');
+  assert.deepEqual(d.cracks.map((c) => c.pts), mk(issues).cracks.map((c) => c.pts), 'the same cracks every time');
   assert.ok(d.cracks.every((c) => c.pts.length >= 8 && c.branch.length > 0 && c.width > 0.1));
 });
 
@@ -129,4 +160,5 @@ test('the hull is convex and clockwise', () => {
   const hull = hullFor({ w: 80, h: 44 });
   assert.ok(hullContains(hull, { x: 40, y: 22 }, MARGIN));
   assert.ok(!hullContains(hull, { x: 40, y: 22 + 22 + MARGIN + 0.1 }));
+  assert.ok(hullDepth(hull, { x: 40, y: 22 }) > 5 && hullDepth(hull, { x: -100, y: 0 }) < 0 && RAIL < HOLD_RAIL);
 });

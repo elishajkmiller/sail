@@ -9,7 +9,8 @@ import { PathIndex, condition } from './github.js';
 import * as treemap from './treemap.js';
 import { parseTarget } from './util.js';
 import { Panels } from './ui.js';
-import { makeSea, makeSky, makeLights, buildShipView, DotFleet, makeCraft, LabelPool, RoomLabels, waveHeight, DECK_Y, PALETTE } from './scene.js';
+import { makeSea, makeSky, makeLights, buildShipView, DotFleet, makeCraft, LabelPool, RoomLabels, waveHeight, setSeaHole, PALETTE } from './scene.js';
+import { levelY, HOLD_Y } from './deck.js';
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -53,6 +54,7 @@ const app = {
   flyTo: (i) => { game.flyTo(i); },
   refreshShip,
   setStarred(key, on) { app.starred.set(key, on); },
+  setPortraits(i, urls) { const m = game.sea[i]; if (m) views.get(m.key)?.setPortraits(urls); },
   ticker: (line, cls) => panels.ticker(line, cls),
   saveToken(t) {
     t = (t || '').trim();
@@ -219,7 +221,7 @@ canvas.addEventListener('wheel', (e) => { e.preventDefault(); cam.zoom = Math.mi
 const ray = new THREE.Raycaster(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 function pickWorld(cx, cy) {
   ray.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), camera);
-  plane.constant = game.aboard !== null ? -(DECK_Y + 0.1) : 0;
+  plane.constant = game.aboard !== null ? -(levelY(game.level) + 0.1) : 0;
   const hit = ray.ray.intersectPlane(plane, new THREE.Vector3());
   return hit ? { x: hit.x, y: hit.z } : null;
 }
@@ -248,9 +250,10 @@ function handleEvents() {
   for (const ev of game.events.splice(0)) {
     if (ev.type === 'arrived') { cam.yaw = 0; cam.zoom = 1; panels.renderSide(); }
     else if (ev.type === 'boarded') { cam.zoom = 0.7; cam.pitch = 0.5; panels.renderSide(); }
+    else if (ev.type === 'level') { cam.pitch = ev.level === 'hold' ? 0.75 : ev.level === 'quarters' ? 0.8 : 0.5; cam.zoom = ev.level === 'quarters' ? 0.7 : 0.8; panels.hide(); panels.renderSide(); }
     else if (ev.type === 'left') { cam.zoom = 1.4; panels.renderSide(); panels.hide(); }
     else if (ev.type === 'open') openShip(ev.name, 'land');
-    else if (ev.type === 'station') ({ flag: () => panels.flagCard(ev.ship), tavern: () => panels.tavernCard(ev.ship), wheel: () => panels.wheelCard(ev.ship) })[ev.id]?.();
+    else if (ev.type === 'station') ({ flag: () => panels.flagCard(ev.ship), tavern: () => panels.tavernCard(ev.ship), wheel: () => panels.wheelCard(ev.ship), desk: () => panels.deskCard(ev.ship) })[ev.id]?.();
     else if (ev.type === 'file') panels.fileCard(ev.ship, ev.file);
   }
   const r = game.reading;
@@ -322,9 +325,10 @@ function frame() {
     const m = game.sea[game.aboard];
     const floatY = (m ? waveHeight(m.x + m.deck.size.w / 2, m.y + m.deck.size.h / 2, t) * 0.6 : 0) - (m && game.conditionOf(game.aboard) === 'wreck' ? 0.9 : 0);
     const walking = !!(game.walkTo || down.has('KeyW') || down.has('KeyA') || down.has('KeyS') || down.has('KeyD'));
-    craft.person.position.set(h.x, floatY + DECK_Y + (walking ? Math.abs(Math.sin(t * 10)) * 0.06 : 0), h.y);
+    const stand = floatY + levelY(h.level);
+    craft.person.position.set(h.x, stand + (walking ? Math.abs(Math.sin(t * 10)) * 0.06 : 0), h.y);
     craft.person.rotation.y = -h.face;
-    [tx, ty, tz] = [h.x, floatY + DECK_Y + 1.6, h.y];
+    [tx, ty, tz] = [h.x, stand + 1.6, h.y];
   } else {
     const wy = waveHeight(b.x, b.y, t) * 0.6;
     craft.boat.position.set(b.x, wy + 0.1, b.y);
@@ -336,7 +340,7 @@ function frame() {
     let d = b.heading - cam.yaw; d = Math.atan2(Math.sin(d), Math.cos(d));
     cam.yaw += d * (1 - Math.exp(-1.6 * dt));
   }
-  const dist = (h ? 9 : 26) * cam.zoom;
+  const dist = (h ? (h.level === 'quarters' ? 6.5 : 9) : 26) * cam.zoom;
   cam.x += (tx - cam.x) * (1 - Math.exp(-8 * dt)); cam.y += (ty - cam.y) * (1 - Math.exp(-8 * dt)); cam.z += (tz - cam.z) * (1 - Math.exp(-8 * dt));
   camera.position.set(cam.x - Math.cos(cam.yaw) * Math.cos(cam.pitch) * dist, cam.y + Math.sin(cam.pitch) * dist, cam.z - Math.sin(cam.yaw) * Math.cos(cam.pitch) * dist);
   camera.lookAt(cam.x, cam.y + 0.5, cam.z);
@@ -344,6 +348,7 @@ function frame() {
   // the world
   sea.position.set(Math.round(camera.position.x / 12.5) * 12.5, 0, Math.round(camera.position.z / 12.5) * 12.5);
   sea.material.uniforms.uTime.value = t;
+  setSeaHole(sea, game.aboard !== null && game.level === 'hold' ? game.sea[game.aboard] : null);
   sky.position.copy(camera.position);
   const loaded = new Set(game.sea.map((m) => m.key));
   const around = { x: cam.x, y: cam.z };
@@ -351,14 +356,19 @@ function frame() {
   shipLabels.update(fleet.entries.slice(0, 12), t);
   game.sea.forEach((m, i) => {
     const near = game.aboard === i;
-    views.get(m.key)?.update(t, near ? game.nearCrack : -1, game.reading?.ship === i ? game.reading.issue : null, !!app.starred.get(m.key));
+    const view = views.get(m.key);
+    if (!view) return;
+    const want = near ? game.level : null;
+    if (view.level !== want) view.setLevel(want);
+    view.update(t, near && game.level === 'hold' ? game.nearCrack : -1, game.reading?.ship === i ? game.reading.issue : null, !!app.starred.get(m.key));
   });
-  if (game.aboard !== null) roomLabels.update(game.sea[game.aboard], { x: game.human.x - game.sea[game.aboard].x, y: game.human.y - game.sea[game.aboard].y }, t, waveHeight(game.human.x, game.human.y, t) * 0.6);
+  if (game.aboard !== null && game.level === 'hold') roomLabels.update(game.sea[game.aboard], { x: game.human.x - game.sea[game.aboard].x, y: game.human.y - game.sea[game.aboard].y }, t, waveHeight(game.human.x, game.human.y, t) * 0.6 + HOLD_Y);
   else roomLabels.group.children.forEach((s) => { s.visible = false; });
 
   panels.prompt(game.prompt);
+  const levelHint = { deck: 'the main deck: the flag, the tavern table, the hatch down to the hold, the door under the helm, the stairs up', hold: 'the hold: the cracks are here, and the files', helm: 'the helm: the wheel', quarters: "the captain's quarters" }[game.level];
   document.getElementById('hint').textContent = game.aboard !== null
-    ? 'W A S D walk  -  Shift run  -  click to walk  -  E: read a crack, use the flag, table or wheel, open a file  -  Space: back to your boat  -  drag to look, wheel to zoom'
+    ? `${levelHint}  -  W A S D walk, Shift run, click to walk, E to use what is beside you, Space back to your boat, drag to look, wheel to zoom`
     : 'W S sail  -  A D steer  -  Shift boost  -  sail over a ship to land on her  -  double-click a ship to board  -  drag to look, wheel to zoom';
   pollFeed(t);
   renderer.render(scene, camera);

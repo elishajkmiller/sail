@@ -57,6 +57,19 @@ export function parseRepo(v) {
   };
 }
 
+const AVATAR = 'https://avatars.githubusercontent.com/';
+const avatarOf = (u) => (typeof u === 'string' && u.startsWith(AVATAR) ? u : '');
+
+/** The owner of a repo (a person or an organisation) as GitHub describes them. */
+export function parseOwner(v) {
+  if (!valid(v?.login)) return null;
+  return {
+    login: v.login, type: v.type === 'Organization' ? 'Organization' : 'User', name: clean(v.name, 80), bio: clean(v.bio, 300), company: clean(v.company, 80),
+    location: clean(v.location, 80), followers: Number(v.followers) || 0, following: Number(v.following) || 0, publicRepos: Number(v.public_repos) || 0,
+    createdAt: parseIso(v.created_at), avatar: avatarOf(v.avatar_url),
+  };
+}
+
 /** Which files of a tree a piece of text is talking about. */
 export class PathIndex {
   constructor(paths) {
@@ -206,6 +219,24 @@ export class Github {
     const repo = parseRepo((await this.json(`/repos/${owner}/${name}`)).v);
     if (!repo) throw new GhError('shape', "GitHub's answer could not be read");
     return repo;
+  }
+
+  /** The owner's public profile (a person or an organisation). */
+  async owner(login) {
+    if (!valid(login)) throw new GhError('notfound', 'not found');
+    const o = parseOwner((await this.json(`/users/${login}`)).v);
+    if (!o) throw new GhError('shape', "GitHub's answer could not be read");
+    return o;
+  }
+
+  /** The people who have contributed most to the repo (ten at most, most first). An empty repo has none. */
+  async contributors(owner, name) {
+    if (!valid(owner) || !valid(name)) throw new GhError('notfound', 'not found');
+    const r = await this.read(`/repos/${owner}/${name}/contributors?per_page=10`);
+    if (!r.text.trim()) return [];
+    let v;
+    try { v = JSON.parse(r.text); } catch { throw new GhError('shape', "GitHub's answer could not be read"); }
+    return (Array.isArray(v) ? v : []).filter((c) => valid(c?.login)).map((c) => ({ login: c.login, contributions: Number(c.contributions) || 0, avatar: avatarOf(c.avatar_url), bot: c.type === 'Bot' }));
   }
 
   /** Repos matching some words, most starred first. */
