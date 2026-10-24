@@ -227,6 +227,8 @@ test('a huge ship rocks about her middle by a small angle: her bow and stern do 
   g.moor({ repo: { owner: 'big', name: 'kernel', fullName: 'big/kernel', stars: 9000, language: 'C', pushedAt: 1_789_000_000, archived: false, defaultBranch: 'main', can: {} }, files, partial: null, item: treemap.build(files), issues: [], moreIssues: false, checks: { total: 0, failed: [] }, notes: [] });
   const { deck } = g.sea[0], L = deck.lines;
   assert.ok(deck.size.h * 2.2 < deck.size.w, `she is long, not a box: ${deck.size.w} by ${deck.size.h}`);
+  const rig = buildShipView(g.sea[0], 'sailing'), top = new THREE.Box3().setFromObject(rig.group).max.y;
+  assert.ok(top > 0.18 * L.L, `her mast is in step with her length: ${top.toFixed(0)} m over a hull of ${L.L.toFixed(0)} m`);
   for (const condition of ['sailing', 'wreck']) {
     const view = buildShipView(g.sea[0], condition), scene = new THREE.Scene();
     scene.add(view.group);

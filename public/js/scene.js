@@ -426,7 +426,7 @@ export function buildShipView(ship, conditionName, flagTexture = null) {
   const hullMat = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: toonGradient(), side: THREE.FrontSide });
   const wallMat = mat(woodColor.clone().multiplyScalar(1.3));
   const box = (sx, sy, sz, x, y, z, material = timber) => { const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), material); m.position.set(x, y, z); return m; };
-  const { cy, x0, x1, beam } = L, c = deck.castle, xc1 = c.x1, cl = c.x1 - c.x0, mid = (c.x0 + c.x1) / 2, k = clamp(Math.sqrt(L.L / 55), 1, 3);
+  const { cy, x0, x1, beam } = L, c = deck.castle, xc1 = c.x1, cl = c.x1 - c.x0, mid = (c.x0 + c.x1) / 2, k = clamp(L.L / 70, 1, 6), kf = Math.min(k, 2.5);   // k: how big her rig is, in step with her length (a mast of a fifth of her length); kf: the flag
   const hullG = new THREE.Group(), holdG = new THREE.Group(), deckG = new THREE.Group(), propsG = new THREE.Group(), cabinG = new THREE.Group(), helmG = new THREE.Group(), quartersG = new THREE.Group();
   floating.add(hullG, holdG, deckG, propsG, cabinG, helmG, quartersG);
   const helmY = DECK_Y + HELM_RISE;
@@ -585,10 +585,10 @@ export function buildShipView(ship, conditionName, flagTexture = null) {
   figure.position.set(x1 - 0.2, L.rail(x1) + 0.3, cy);
   propsG.add(sprit, figure);
   const flagSt = deck.station('flag');
-  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 9, 6), mat(0xcccccc));
-  pole.position.set(flagSt.x, DECK_Y + 4.5, flagSt.y);
-  const cloth = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.2), new THREE.MeshBasicMaterial({ map: flagTexture, color: flagTexture ? 0xffffff : conditionColor(conditionName), side: THREE.DoubleSide }));
-  cloth.position.set(flagSt.x, DECK_Y + 6, flagSt.y + 1.7);
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07 * kf, 0.09 * kf, 9 * kf, 6), mat(0xcccccc));
+  pole.position.set(flagSt.x, DECK_Y + 4.5 * kf, flagSt.y);
+  const cloth = new THREE.Mesh(new THREE.PlaneGeometry(3.2 * kf, 2.2 * kf), new THREE.MeshBasicMaterial({ map: flagTexture, color: flagTexture ? 0xffffff : conditionColor(conditionName), side: THREE.DoubleSide }));
+  cloth.position.set(flagSt.x, DECK_Y + 6 * kf, flagSt.y + 1.7 * kf);
   cloth.rotation.y = Math.PI / 2;
   propsG.add(pole, cloth);
   // a table for each discussion, with a sign over it that says what is talked of there
@@ -653,7 +653,7 @@ export function buildShipView(ship, conditionName, flagTexture = null) {
       beamMat.opacity = 0.1 + 0.18 * pulse;
       leak.material.opacity = deck.cracks.length ? Math.min(0.55, 0.12 + deck.cracks.length * 0.02) * (0.6 + 0.4 * pulse) : 0;
       if (nearCrack >= 0) { const cr = deck.cracks[nearCrack]; ring.visible = true; ring.position.set(cr.pts[0].x, HOLD_Y + 0.2, cr.pts[0].y); } else ring.visible = false;
-      cloth.position.y = DECK_Y + (starred ? 6 : 3.4) + 0.12 * Math.sin(t * 2.5);
+      cloth.position.y = DECK_Y + (starred ? 6 : 3.4) * kf + 0.12 * Math.sin(t * 2.5);
       beamMeshes.forEach((b2, i) => { b2.visible = readingIssue === null || deck.cracks[i].issue !== readingIssue || (Math.floor(t * 4) % 2 === 0); });
     },
     /** Hangs the top contributors in the three frames of the quarters (pictures from GitHub only). */
