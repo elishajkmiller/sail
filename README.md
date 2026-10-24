@@ -2,10 +2,10 @@
 
 Every public GitHub repo is a ship on a dusk sea. Sail your boat over a ship and you land on her main deck as a sailor. She has three storeys:
 
-- **the main deck** has the flag (star the repo), the tavern table (read and join her Discussions), the hatch down to the hold, the door of the captain's quarters and the stairs up to the helm
-- **the helm**, a raised platform at the stern, has the wheel: manage issues and pull requests, when you may write to the repo
-- **the captain's quarters**, under the helm, show the owner's profile and the top contributors (a desk, and their pictures in frames on the wall)
-- **the hold**, below deck, has her files as rooms and her folders as walls, and every open issue is a glowing crack in the room it names (or in the hull, when it names no file). The deck lifts away when you go down so you see the hold from above
+- **the main deck** has the flag (star the repo), a table for every Discussion (with a token; E at a table opens the thread), the hatch down to the hold, the door of the captain's quarters and a stair up to the helm on each side
+- **the helm** is the roof of the stern castle, which is the whole back of the ship, and has the wheel: manage issues and pull requests, when you may write to the repo
+- **the captain's quarters**, inside the castle under the helm, show the owner's profile and the top contributors (a desk, and their pictures in frames on the wall)
+- **the hold**, below deck, has her files as rooms and her folders as walls, and every open issue is a glowing crack in the room it names (or in the hull, when it names no file). The deck lifts away when you go down so you see the hold from above, and only the inside of the hull is drawn
 
 The ships around a ship are found live from the GitHub API: the people who starred her most recently, and what else they starred. The sea grows from where you have been, and it is kept in this browser. The ship you are standing on is kept live from her own event feed (stars, forks, issues, pushes), asked for once a minute.
 

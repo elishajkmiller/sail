@@ -120,7 +120,8 @@ test('E at a station asks for it, E at a stair or hatch changes storey, and E in
     if (s.to) {
       assert.equal(g.level, s.to.level, `${s.id} leads to ${s.to.level}`);
       assert.deepEqual(g.events.at(-1), { type: 'level', ship: 0, level: s.to.level });
-    } else assert.deepEqual(g.events.at(-1), { type: 'station', ship: 0, id: s.id });
+    } else if (s.id === 'table') assert.deepEqual(g.events.at(-1), { type: 'station', ship: 0, id: 'table', index: 0, kind: 'locked', number: null });
+    else assert.deepEqual(g.events.at(-1), { type: 'station', ship: 0, id: s.id });
   }
   const main = FILES.findIndex((f) => f[0] === 'src/main.rs');
   const c = d.cells[d.fileCell.get(main)].rect;
@@ -275,4 +276,57 @@ test('standing at a station it is the station that E uses, even with a crack in 
   g.placeAt(0, 'hold', { x: ladder.x - 2.6, y: ladder.y });
   g.step(0.02, none);
   assert.match(g.prompt, /^E: read #/, 'a little way off, the crack is what is there');
+});
+
+test('every discussion is a table on the deck: the prompt names it, E sits down at it, and the talk can arrive after the ship', () => {
+  const g = fresh();
+  assert.deepEqual(g.sea[0].deck.tables.map((t) => t.kind), ['locked'], 'with no token there is one table, and it says why');
+  g.placeAt(0, 'deck', g.sea[0].deck.tables[0]);
+  g.step(0.02, none);
+  assert.match(g.prompt, /^E: the table \(a token lets you hear/);
+  const talk = { enabled: true, list: [{ number: 7, title: 'How do I add a sail to the mast?', comments: 4 }, { number: 9, title: 'Release plans', comments: 0 }, { number: 12, title: 'x'.repeat(100), comments: 1 }] };
+  g.setTalk(0, talk);
+  const tables = g.sea[0].deck.tables;
+  assert.equal(tables.length, 3);
+  g.placeAt(0, 'deck', tables[0]);
+  g.events.length = 0;
+  g.step(0.02, none);
+  assert.equal(g.prompt, 'E: sit at the table: How do I add a sail to the mast? (4 comments)');
+  g.step(0.02, { interact: true });
+  assert.deepEqual(g.events.at(-1), { type: 'station', ship: 0, id: 'table', index: 0, kind: 'talk', number: 7 });
+  g.placeAt(0, 'deck', tables[1]);
+  g.step(0.02, none);
+  assert.equal(g.prompt, 'E: sit at the table: Release plans', 'no "(0 comments)"');
+  g.placeAt(0, 'deck', tables[2]);
+  g.step(0.02, none);
+  assert.ok(g.prompt.length < 100 && g.prompt.endsWith('...' + (g.prompt.includes('(1 comments)') ? '' : ' (1 comments)')) || g.prompt.includes('...'), `a long title is cut: ${g.prompt}`);
+  // issues changing does not lose the tables
+  g.setIssues(0, [ISSUES[0]], false, null);
+  assert.equal(g.sea[0].deck.tables.length, 3);
+  // no discussions, and discussions off
+  g.setTalk(0, { enabled: true, list: [] });
+  assert.deepEqual(g.sea[0].deck.tables.map((t) => t.kind), ['empty']);
+  g.setTalk(0, { enabled: false, list: [] });
+  g.placeAt(0, 'deck', g.sea[0].deck.tables[0]);
+  g.step(0.02, none);
+  assert.match(g.prompt, /no discussions/);
+  // a ship that is opened with her talk already known has the tables from the start
+  const g2 = new Game({ atlas: new Atlas(), now: () => 1_790_000_000 });
+  g2.moor({ ...data('deck/mast'), talk });
+  assert.equal(g2.sea[0].deck.tables.length, 3);
+});
+
+test('the stairs are on both sides of the stern castle, each way up and down', () => {
+  const g = fresh(), d = g.sea[0].deck;
+  for (const [up, down] of [['stairsUp', 'stairsDown'], ['stairsUp2', 'stairsDown2']]) {
+    g.placeAt(0, 'deck', d.station(up));
+    g.step(0.02, none);
+    assert.equal(g.prompt, 'E: climb to the helm', up);
+    g.step(0.02, { interact: true });
+    assert.equal(g.level, 'helm');
+    g.step(0.02, none);
+    assert.equal(g.nearStation.id, down, 'he arrives at the top of the same flight');
+    g.step(0.02, { interact: true });
+    assert.equal(g.level, 'deck');
+  }
 });

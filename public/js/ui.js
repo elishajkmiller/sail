@@ -89,7 +89,7 @@ export class Panels {
     if (!m) {
       kids.push(el('h2', { text: 'Ships' }),
         el('p', { text: 'Every public GitHub repo is a ship. Bring one in by name (owner/repo, or its address) or search for words, then sail to her.' }),
-        el('p', { class: 'muted', text: 'A ship\'s condition comes from her last push: sailing (90 days), anchored (a year), derelict (older). An archived repo is a wreck. Below her deck, in the hold, her open issues are cracks. On deck is the tavern table (discussions); the helm is where she is managed; under the helm are the captain\'s quarters. Repos that the same people starred lie near each other.' }));
+        el('p', { class: 'muted', text: 'A ship\'s condition comes from her last push: sailing (90 days), anchored (a year), derelict (older). An archived repo is a wreck. Below her deck, in the hold, her open issues are cracks. On deck is a table for every discussion; the helm is where she is managed; under the helm are the captain\'s quarters. Repos that the same people starred lie near each other.' }));
     } else {
       const cond = condition(m.repo, now), r = m.repo;
       kids.push(el('h2', { text: r.fullName }),
@@ -203,27 +203,22 @@ export class Panels {
       })));
   }
 
-  // the tavern table: her discussions
-  async tavernCard(shipIndex) {
-    const m = this.app.game.sea[shipIndex], { github } = this.app, note = el('p'), body = el('div');
-    this.show('tavern', el('h2', { text: 'The tavern table' }), el('p', { class: 'muted', text: `Discussions of ${m.repo.fullName}` }), body, note);
-    if (!github.hasToken) { body.append(el('p', { class: 'muted', text: 'Reading discussions needs a token (GitHub only answers GraphQL for signed-in callers). Any token will do; it needs no permissions.' })); return; }
-    body.append(el('p', { class: 'muted', text: 'asking the tavern...' }));
-    const found = await this.guard(note, () => github.discussions(m.repo.owner, m.repo.name));
-    if (!found) { body.replaceChildren(); return; }
-    if (!found.enabled || !found.list.length) {
-      body.replaceChildren(el('p', { text: found.enabled ? 'Nobody has sat down here yet: no discussions.' : 'This repo has not opened a tavern: Discussions are off.' }), el('p', {}, ghLink(m, '/discussions', 'open on GitHub')));
-      return;
-    }
-    const now = this.app.game.now();
-    body.replaceChildren(el('ul', {}, ...found.list.map((d) => el('li', { class: 'pick', onclick: () => this.threadCard(shipIndex, d.number) },
-      el('span', { class: 'gold', text: d.category ? `[${d.category}] ` : '' }), d.title, el('br'), el('span', { class: 'muted', text: `${d.author || 'someone'}, ${ago(d.at, now)}, ${d.comments} comments${d.answered ? ', answered' : ''}${d.votes ? ', ' + d.votes + ' votes' : ''}` })))),
-      el('p', {}, ghLink(m, '/discussions', 'open on GitHub')));
+  // a table on the deck: one discussion (the thread opens at once), or why there is nothing to read at this one
+  async tableCard(shipIndex, index) {
+    const m = this.app.game.sea[shipIndex], table = m?.deck.tables[index];
+    if (!table) return;
+    if (table.kind === 'talk') { this.threadCard(shipIndex, table.number); return; }
+    const why = {
+      locked: 'Reading discussions needs a token (GitHub only answers GraphQL for signed-in callers). Any token will do; it needs no permissions. With one, a table is set for every discussion.',
+      empty: 'Nobody has sat down here yet: no discussions.',
+      off: 'This repo has not opened any Discussions.',
+    }[table.kind];
+    this.show('table', el('h2', { text: 'An empty table' }), el('p', { class: 'muted', text: `Discussions of ${m.repo.fullName}` }), el('p', { text: why }), el('p', {}, ghLink(m, '/discussions', 'open on GitHub')));
   }
 
   async threadCard(shipIndex, number) {
     const m = this.app.game.sea[shipIndex], { github } = this.app, note = el('p'), body = el('div');
-    this.show('thread', el('button', { text: '< back to the table', onclick: () => this.tavernCard(shipIndex) }), body, note);
+    this.show('thread', el('button', { text: 'close', onclick: () => this.hide() }), body, note);
     body.append(el('p', { class: 'muted', text: 'listening...' }));
     const d = await this.guard(note, () => github.discussion(m.repo.owner, m.repo.name, number));
     if (!d) return;

@@ -125,6 +125,7 @@ async function openShip(fullName, arrival = 'fly') {
     if (github.hasToken) github.isStarred(owner, name).then((on) => on !== null && app.setStarred(`${owner}/${name}`.toLowerCase(), on)).catch(() => {});
     const i = game.moor({ repo, files: tree.files, partial: tree.partial, item: treemap.build(tree.files), issues: found.issues, moreIssues: found.more, checks, notes }, arrival);
     makeView(i);
+    loadTalk(i);
     say(`${repo.fullName} is in the sea`);
     panels.renderSide();
   } catch (e) {
@@ -158,6 +159,19 @@ async function expand(fullName) {
   } finally {
     busy = false;
   }
+}
+
+/** With a token, her discussions are read and a table is put on her deck for each. */
+async function loadTalk(i) {
+  const m = game.sea[i];
+  if (!m || !github.hasToken) return;
+  const key = m.key;
+  try {
+    const found = await github.discussions(m.repo.owner, m.repo.name);
+    if (game.sea[i]?.key !== key) return;
+    game.setTalk(i, found);
+    makeView(i);
+  } catch { /* the tables stay as they were: a single empty one */ }
 }
 
 /** Her issues have changed: asked for again, and her cracks made again. */
@@ -278,7 +292,7 @@ function handleEvents() {
     else if (ev.type === 'level') { cam.pitch = ev.level === 'hold' ? 0.75 : ev.level === 'quarters' ? 0.8 : 0.5; cam.zoom = ev.level === 'quarters' ? 0.7 : 0.8; panels.hide(); panels.renderSide(); }
     else if (ev.type === 'left') { cam.zoom = 1.4; panels.renderSide(); panels.hide(); }
     else if (ev.type === 'open') openShip(ev.name, 'land');
-    else if (ev.type === 'station') ({ flag: () => panels.flagCard(ev.ship), tavern: () => panels.tavernCard(ev.ship), wheel: () => panels.wheelCard(ev.ship), desk: () => panels.deskCard(ev.ship) })[ev.id]?.();
+    else if (ev.type === 'station') ({ flag: () => panels.flagCard(ev.ship), table: () => panels.tableCard(ev.ship, ev.index), wheel: () => panels.wheelCard(ev.ship), desk: () => panels.deskCard(ev.ship) })[ev.id]?.();
     else if (ev.type === 'file') panels.fileCard(ev.ship, ev.file);
   }
   const r = game.reading;
@@ -399,7 +413,7 @@ function frame() {
   } else roomLabels.detach();
 
   panels.prompt(game.prompt);
-  const levelHint = { deck: 'the main deck: the flag, the tavern table, the hatch down to the hold, the door under the helm, the stairs up', hold: 'the hold: the cracks are here, and the files', helm: 'the helm: the wheel', quarters: "the captain's quarters" }[game.level];
+  const levelHint = { deck: 'the main deck: the flag, a table for every discussion, the hatch down to the hold, the door under the helm, the stairs to the helm', hold: 'the hold: the cracks are here, and the files', helm: 'the helm: the wheel', quarters: "the captain's quarters" }[game.level];
   document.getElementById('hint').textContent = game.aboard !== null
     ? `${levelHint}  -  W A S D walk, Shift run, click to walk, E to use what is beside you, Space back to your boat, look with the mouse (drag, or C for free look) while you move; R puts the camera behind you; Z X turn it; wheel zooms`
     : 'W S sail  -  A D steer  -  Shift boost  -  sail over a ship to land on her  -  double-click a ship to board  -  look with the mouse (drag, or C for free look) while you sail; R puts the camera behind the boat; Z X turn it; wheel zooms';
@@ -426,5 +440,5 @@ if (window.parent !== window) {
 }
 const start = new URLSearchParams(location.search).get('open');
 if (start) openShip(start);
-if (new URLSearchParams(location.search).has('debug')) window.__ships = { game, camera, scene, renderer, atlas, github, cam, THREE, openShip, views };
+if (new URLSearchParams(location.search).has('debug')) window.__ships = { game, camera, scene, renderer, atlas, github, cam, THREE, openShip, views, makeView };
 requestAnimationFrame(frame);

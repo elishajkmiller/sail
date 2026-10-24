@@ -8,10 +8,16 @@ import { condition } from './github.js';
 export const WALK = 6;
 export const REACH = 2.2;
 const PROMPTS = {
-  flag: 'E: the flag (star this repo)', tavern: 'E: the tavern table (discussions)', wheel: 'E: the wheel (manage this repo)', desk: "E: the captain's desk (the owner and the top contributors)",
+  flag: 'E: the flag (star this repo)', wheel: 'E: the wheel (manage this repo)', desk: "E: the captain's desk (the owner and the top contributors)",
   hatch: 'E: climb down into the hold (the cracks are there)', ladder: 'E: climb up to the deck', door: "E: go into the captain's quarters", out: 'E: out to the deck',
-  stairsUp: 'E: climb to the helm', stairsDown: 'E: down to the deck',
+  stairsUp: 'E: climb to the helm', stairsUp2: 'E: climb to the helm', stairsDown: 'E: down to the deck', stairsDown2: 'E: down to the deck',
 };
+
+/** What E at a table of the deck would do: sit down to a discussion, or be told why there is none. */
+function tablePrompt(t) {
+  if (t.kind === 'talk') return `E: sit at the table: ${t.title.length > 60 ? t.title.slice(0, 57) + '...' : t.title}${t.comments ? ` (${t.comments} comments)` : ''}`;
+  return { locked: 'E: the table (a token lets you hear what is said here)', empty: 'E: the table (nobody has sat down here yet)', off: 'E: the table (this repo has no discussions)' }[t.kind];
+}
 export const STATION_REACH = 1.8;
 export const BOAT_TOP = 30;
 const BOAT_ACC = 12;
@@ -53,7 +59,7 @@ export class Game {
    * renewed where she lies. `arrival`: 'fly' puts the boat off her stern; 'land' lands on her if the boat is still over her.
    */
   moor(data, arrival = 'fly') {
-    const deck = new Deck(data.files, data.item, data.issues);
+    const deck = new Deck(data.files, data.item, data.issues, data.talk ?? null);
     const k = key(data.repo.fullName);
     const old = this.find(data.repo.fullName);
     const entry = this.atlas.upsert({ name: data.repo.fullName, stars: data.repo.stars, language: data.repo.language, pushedAt: data.repo.pushedAt });
@@ -249,7 +255,7 @@ export class Game {
       // the cracks and the rooms (the files) are in the hold
       if (level === 'hold') { this.nearCrack = m.deck.crackNear(p, REACH); this.nearRoom = m.deck.roomAt(p); }
       if (this.reading) this.prompt = 'E: close';
-      else if (this.nearStation) this.prompt = PROMPTS[this.nearStation.id];
+      else if (this.nearStation) this.prompt = this.nearStation.id === 'table' ? tablePrompt(this.nearStation) : PROMPTS[this.nearStation.id];
       else if (this.nearCrack >= 0) { const issue = m.issues[m.deck.cracks[this.nearCrack].issue]; this.prompt = `E: read #${issue.number} ${issue.title}`; }
       else if (this.nearRoom >= 0) this.prompt = `E: open ${m.files[m.deck.cells[this.nearRoom].file][0]}`;
       else this.prompt = 'Space: back to your boat';
@@ -268,7 +274,10 @@ export class Game {
       const to = this.nearStation.to;
       this.placeAt(this.aboard, to.level, { x: to.x, y: to.y });
       this.events.push({ type: 'level', ship: this.aboard, level: to.level });
-    } else if (this.nearStation) this.events.push({ type: 'station', ship: this.aboard, id: this.nearStation.id });
+    } else if (this.nearStation) {
+      const s = this.nearStation;
+      this.events.push(s.id === 'table' ? { type: 'station', ship: this.aboard, id: 'table', index: s.index, kind: s.kind, number: s.number } : { type: 'station', ship: this.aboard, id: s.id });
+    }
     else if (this.nearCrack >= 0) this.reading = { ship: this.aboard, issue: m.deck.cracks[this.nearCrack].issue };
     else if (this.nearRoom >= 0) this.events.push({ type: 'file', ship: this.aboard, file: m.deck.cells[this.nearRoom].file });
   }
@@ -292,6 +301,15 @@ export class Game {
     }
   }
 
+  /** The discussions of a ship have arrived (or are not to be had): a table for each is put on her deck. */
+  setTalk(i, talk) {
+    const m = this.sea[i];
+    if (!m) return;
+    m.talk = talk;
+    m.deck.setTables(talk);
+    this.lookAround();
+  }
+
   /** An opened ship's issues have changed (one was opened or closed): her cracks are made again, where they are she keeps her place. */
   setIssues(i, issues, moreIssues, checks) {
     const m = this.sea[i];
@@ -299,7 +317,7 @@ export class Game {
     m.issues = issues;
     m.moreIssues = moreIssues;
     if (checks) m.checks = checks;
-    m.deck = new Deck(m.files, m.item, issues);
+    m.deck = new Deck(m.files, m.item, issues, m.talk ?? null);
     if (this.reading?.ship === i) this.reading = null;
     this.lookAround();
   }

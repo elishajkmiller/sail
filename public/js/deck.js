@@ -8,8 +8,9 @@
 import * as treemap from './treemap.js';
 import { clamp, rng } from './util.js';
 
-/** How far the hull reaches beyond the deck on every side but the bow. */
+/** How far the hull reaches aft of the deck, and how far her sides stand out from it. */
 export const MARGIN = 3.5;
+export const SIDE = 4.5;
 /** How near the edge of the hull he may walk on deck, and in the hold (where the hull's walls are thicker). */
 export const RAIL = 0.7;
 export const HOLD_RAIL = 1.1;
@@ -24,19 +25,72 @@ export const levelY = (level) => ({ hold: HOLD_Y, deck: DECK_Y, helm: DECK_Y + H
 /** How big the deck of a ship with this many files is: more files, a longer ship (but never a dinghy, and never a harbour). */
 export function deckSize(files) {
   const w = clamp(25 + 7 * Math.sqrt(files), 35, 300);
-  return { w, h: w * 0.55 };
+  return { w, h: w * 0.42 };
 }
 
-/** The hull: a long deck with chamfered stern corners and a rounded, pointed bow, going clockwise (y down). */
-export function hullFor({ w, h }) {
-  const bowLen = clamp(w * 0.18, 8, 35), cx = w + 1, cy = h / 2, ry = h / 2 + MARGIN;
-  const pts = [{ x: -MARGIN + 2, y: -MARGIN }, { x: cx, y: -MARGIN }];
-  for (let k = 1; k <= 15; k++) {
-    const a = -Math.PI / 2 + (Math.PI * k) / 16;
-    pts.push({ x: cx + bowLen * Math.cos(a), y: cy + ry * Math.sin(a) });
-  }
-  pts.push({ x: cx, y: h + MARGIN }, { x: -MARGIN + 2, y: h + MARGIN }, { x: -MARGIN, y: h + MARGIN - 2 }, { x: -MARGIN, y: -MARGIN + 2 });
-  return pts;
+/**
+ * The lines of the ship: how wide she is at each place along her (the plan), how deep her keel is, how high her rail stands, and how far
+ * from the middle her side is at a height. A fuller midship, a squarish stern that narrows a little, a long pointed bow, a keel that is
+ * deepest aft and comes up forward, a rail that sweeps up at the bow, and a side that flares out as it rises.
+ */
+export function shipLines({ w, h }, { castle = true } = {}) {
+  const cy = h / 2, x0 = -MARGIN, bow = clamp(w * 0.4, 12, 120), x1 = w + bow, L = x1 - x0, bmax = h / 2 + SIDE, xs = w * 0.45;
+  const beam = (x) => {
+    if (x <= x0) return bmax * 0.8;
+    if (x >= x1) return 0;
+    if (x < x0 + 6) { const t = (x - x0) / 6; return bmax * (0.8 + 0.2 * (1 - (1 - t) * (1 - t))); }
+    if (x <= xs) return bmax;
+    const r = (x - xs) / (x1 - xs);
+    return bmax * (1 - r * r); // a parabola: the sides come to a true point
+  };
+  const u = (x) => clamp((x - x0) / L, 0, 1);
+  const keel = (x) => 3.6 * (1 - 0.85 * Math.pow(u(x), 4));
+  const castleX1 = castle ? x0 + clamp(w * 0.16, 7, 14) : x0, castleTop = DECK_Y + HELM_RISE - 0.25;
+  const bulwark = (x) => DECK_Y + 0.9 + 2.6 * Math.pow(u(x), 5) + 0.5 * Math.pow(1 - u(x), 6);
+  // the rail stands as high as the roof of the stern castle all along it, then steps down to the bulwark and sweeps up again at the bow
+  const rail = (x) => {
+    if (castle && x <= castleX1) return castleTop;
+    const t = clamp((x - castleX1) / 0.9, 0, 1), s = t * t * (3 - 2 * t);
+    return castleTop + (bulwark(x) - castleTop) * s;
+  };
+  // the distance of the side from the middle, at a height above the sea: flared above the water, and a box-like curve down to the keel
+  const lateral = (x, y) => {
+    const b = beam(x);
+    if (y >= 0) return b * (0.93 + 0.07 * (y / DECK_Y));
+    const t = clamp(-y / keel(x), 0, 1);
+    return b * 0.93 * Math.pow(1 - Math.pow(t, 4), 0.25);
+  };
+  return { cy, x0, x1, L, bmax, xs, beam, keel, rail, lateral, bow, castleX1, castleTop };
+}
+
+/** The hull seen from above at the main deck (the line the rail stands on), going clockwise (y down). */
+export function hullFor(size) {
+  const { cy, x0, x1, xs, beam } = shipLines(size);
+  const xsList = [x0, x0 + 1.5, x0 + 3, x0 + 6, (x0 + 6 + xs) / 2, xs];
+  const N = clamp(Math.ceil((x1 - xs) / 5), 16, 70); // longer ships have more points along the bow, so that the outline stays true
+  for (let i = 1; i < N; i++) xsList.push(xs + (x1 - xs) * (1 - Math.pow(1 - i / N, 1.6)));
+  const side = xsList.map((x) => ({ x, y: cy - beam(x) }));
+  const back = [...xsList].reverse().map((x) => ({ x, y: cy + beam(x) }));
+  return [...side, { x: x1, y: cy }, ...back];
+}
+
+/** The hull at the water line seen from above (the hole the hull makes in the sea). */
+export function waterlineFor(size) {
+  const { cy, x0, x1, lateral } = shipLines(size);
+  const xs = Array.from({ length: 41 }, (_, i) => x0 + ((x1 - x0) * i) / 40);
+  return [...xs.map((x) => ({ x, y: cy - lateral(x, 0) })), ...[...xs].slice(0, -1).reverse().map((x) => ({ x, y: cy + lateral(x, 0) }))];
+}
+
+/** The floor of the hold seen from above: the hull's width at the height of the floor, as far forward as the keel is below it. */
+export function holdHullFor(size) {
+  const lines = shipLines(size), { cy, x0, x1, lateral } = lines;
+  const floorDeep = (x) => lines.keel(x) > -HOLD_Y + 0.5;
+  let xb = x0;
+  for (let x = x0; x <= x1; x += 0.5) if (floorDeep(x)) xb = x;
+  const xsList = [];
+  for (let i = 0; i <= 14; i++) xsList.push(x0 + ((xb - x0) * i) / 14);
+  const half = (x) => lateral(x, HOLD_Y) - 0.15;
+  return [...xsList.map((x) => ({ x, y: cy - half(x) })), ...[...xsList].reverse().map((x) => ({ x, y: cy + half(x) }))];
 }
 
 /** How far inside a convex outline a point is: the distance to the nearest edge, negative outside. */
@@ -88,41 +142,96 @@ export function crackDistance(c, p) {
   return d;
 }
 
-const inRect = (r, p) => p.x >= r.x0 && p.x <= r.x1 && p.y >= r.y0 && p.y <= r.y1;
-const grow = (r, d) => ({ x0: r.x0 - d, y0: r.y0 - d, x1: r.x1 + d, y1: r.y1 + d });
+const wide = (a, b, n) => Array.from({ length: n }, (_, k) => a + ((b - a) * k) / (n - 1));
+
+/** The rectangle of the hold that the file rooms fill: as far forward as the hold is nearly as wide as amidships, and as wide as it is there. */
+function fitPlan(size, lines) {
+  const half = (x) => lines.lateral(x, HOLD_Y) - 0.15;
+  const holdEnd = Math.max(...wide(lines.x0, lines.x1, 400).filter((x) => lines.keel(x) > -HOLD_Y + 0.5));
+  const mid = half(lines.xs * 0.5);
+  let xr = lines.xs;
+  while (xr + 0.5 < holdEnd - 1.5 && half(xr + 0.5) >= 0.84 * mid) xr += 0.5;
+  const x = 0, hy = Math.min(...wide(x, xr, 40).map(half)) - 1.9;
+  return { x, y: lines.cy - hy, w: xr - x, h: 2 * hy };
+}
 
 export class Deck {
-  /** files: [[path, size]], item: treemap.build(files), issues: [{ number, files, comments }] */
-  constructor(files, item, issues) {
+  /** files: [[path, size]], item: treemap.build(files), issues: [{ number, files, comments }], talk: null | { enabled, list } (the discussions) */
+  constructor(files, item, issues, talk = null) {
     this.size = deckSize(files.length);
+    const { w, h } = this.size;
+    this.lines = shipLines(this.size);
+    const { cy, x0, x1, beam } = this.lines;
     this.hull = hullFor(this.size);
-    this.bow = this.hull.reduce((a, b) => (b.x > a.x ? b : a));
+    this.holdHull = holdHullFor(this.size);
+    this.waterline = waterlineFor(this.size);
+    this.bow = { x: x1, y: cy };
     // the file rooms are in the hold
-    this.cells = treemap.layout(item, { x: 0, y: 0, w: this.size.w, h: this.size.h }, 0.3);
+    this.plan = fitPlan(this.size, this.lines);
+    this.cells = treemap.layout(item, this.plan, 0.3);
     this.fileCell = new Map();
     this.cells.forEach((c, i) => { if (c.file !== null) this.fileCell.set(c.file, i); });
-    const { w, h } = this.size, cy = h / 2;
-    this.spawn = { x: w * 0.5, y: cy };
-    // the captain's quarters at the stern, and the helm on their roof
-    const cw = clamp(h * 0.45, 7, 12), cl = clamp(w * 0.12, 6, 9);
-    this.cabin = { x0: -MARGIN + 1, y0: cy - cw / 2, x1: -MARGIN + 1 + cl, y1: cy + cw / 2 };
-    const c = this.cabin, hatch = { x: w * 0.3, y: cy - 3.8 }, stairsX = c.x0 + 3;
+    // the stern castle: the whole back of the ship, the captain's quarters under the helm on its roof
+    const xc1 = this.lines.castleX1;
+    this.castle = { x0, x1: xc1, poly: this.castlePolygon(x0, xc1) };
+    this.spawn = { x: Math.max(w * 0.5, xc1 + 8), y: cy };
+    const hatch = { x: Math.max(w * 0.3, xc1 + 9), y: cy - 3.8 };
     this.hatch = hatch;
+    this.mast = { x: Math.max(w * 0.42, hatch.x + 6), y: cy };
+    const sy = beam(xc1 + 4) - 2.6;
+    // the flag stands where the bow has narrowed to a few metres
+    let fx = x1;
+    while (fx > x0 && hullDepth(this.hull, { x: fx, y: cy }) < 2.6) fx -= 0.25;
     const at = (level, id, x, y, label, to) => ({ id, level, x, y, label, ...(to ? { to } : {}) });
     this.stations = [
-      at('deck', 'flag', this.bow.x - 1.6, cy, 'the flag'),
-      at('deck', 'tavern', w * 0.62, cy + 4.2, 'the tavern table'),
+      at('deck', 'flag', fx, cy, 'the flag'),
       at('deck', 'hatch', hatch.x, hatch.y, 'the hatch down to the hold', { level: 'hold', x: hatch.x, y: hatch.y + 2.0 }),
-      at('deck', 'door', c.x1 + 1.0, cy, "the captain's quarters", { level: 'quarters', x: c.x1 - 1.5, y: cy }),
-      at('deck', 'stairsUp', stairsX, c.y0 - 3.9, 'the stairs up to the helm', { level: 'helm', x: stairsX, y: c.y0 + 1.5 }),
+      at('deck', 'door', xc1 + 1.0, cy, "the captain's quarters", { level: 'quarters', x: xc1 - 1.5, y: cy }),
+      at('deck', 'stairsUp', xc1 + 4.3, cy - sy, 'the stairs up to the helm', { level: 'helm', x: xc1 - 1.6, y: cy - sy }),
+      at('deck', 'stairsUp2', xc1 + 4.3, cy + sy, 'the stairs up to the helm', { level: 'helm', x: xc1 - 1.6, y: cy + sy }),
       at('hold', 'ladder', hatch.x, hatch.y + 1.4, 'the ladder up to the deck', { level: 'deck', x: hatch.x, y: hatch.y + 2.4 }),
-      at('helm', 'wheel', c.x0 + 1.8, cy, 'the wheel'),
-      at('helm', 'stairsDown', stairsX, c.y0 + 1.1, 'the stairs down to the deck', { level: 'deck', x: stairsX, y: c.y0 - 4.3 }),
-      at('quarters', 'desk', c.x0 + 1.5, cy, "the captain's desk"),
-      at('quarters', 'out', c.x1 - 1.0, cy, 'the door to the deck', { level: 'deck', x: c.x1 + 1.8, y: cy }),
+      at('helm', 'wheel', x0 + 2.2, cy, 'the wheel'),
+      at('helm', 'stairsDown', xc1 - 1.2, cy - sy, 'the stairs down to the deck', { level: 'deck', x: xc1 + 5.0, y: cy - sy }),
+      at('helm', 'stairsDown2', xc1 - 1.2, cy + sy, 'the stairs down to the deck', { level: 'deck', x: xc1 + 5.0, y: cy + sy }),
+      at('quarters', 'desk', x0 + 1.8, cy, "the captain's desk"),
+      at('quarters', 'out', xc1 - 1.0, cy, 'the door to the deck', { level: 'deck', x: xc1 + 1.8, y: cy }),
     ];
+    this.setTables(talk);
     this.cracks = [];
     this.crackUp(files, issues);
+  }
+
+  /** The back of the hull from the transom to `x1`, as a polygon (the footprint of the stern castle). */
+  castlePolygon(x0, x1) {
+    const { cy, beam } = this.lines, xs = wide(x0, x1, 7);
+    return [...xs.map((x) => ({ x, y: cy - beam(x) })), ...[...xs].reverse().map((x) => ({ x, y: cy + beam(x) }))];
+  }
+
+  /** The places a table can stand on the main deck: forward of the mast, in rows across the ship, clear of the flag. */
+  tableSpots() {
+    const { w } = this.size, { cy } = this.lines, flag = this.station('flag'), mx = this.mast.x, spots = [];
+    const x0 = Math.max(w * 0.5, this.mast.x + 4), cols = this.size.h > 30 ? 4 : 3;
+    for (let r = 0; r < 40; r++) {
+      for (let c = 0; c < cols; c++) {
+        const p = { x: x0 + r * 5.2, y: cy + (c - (cols - 1) / 2) * 5.8 };
+        if (this.contains('deck', p, 2.2) && Math.hypot(p.x - flag.x, p.y - flag.y) > 4 && Math.hypot(p.x - mx, p.y - cy) > 2.5) spots.push(p);
+      }
+    }
+    return spots;
+  }
+
+  /**
+   * Puts a table on the deck for every discussion (the newest first, as many as there is room for, twelve at most). `talk` is null when they are
+   * not known (they need a token), or { enabled, list }. With none to show there is one table that says why.
+   */
+  setTables(talk) {
+    this.stations = this.stations.filter((s) => s.id !== 'table');
+    const spots = this.tableSpots();
+    const mk = (p, i, extra) => ({ id: 'table', level: 'deck', x: p.x, y: p.y, index: i, ...extra });
+    const list = talk && talk.enabled ? talk.list.slice(0, Math.min(12, spots.length)) : [];
+    if (list.length) list.forEach((d, i) => this.stations.push(mk(spots[i], i, { kind: 'talk', number: d.number, title: d.title, comments: d.comments, label: d.title })));
+    else if (spots.length) this.stations.push(mk(spots[0], 0, { kind: talk === null ? 'locked' : talk.enabled ? 'empty' : 'off', number: null, title: '', comments: 0, label: 'the table' }));
+    this.tables = this.stations.filter((s) => s.id === 'table');
   }
 
   stationsOf(level) { return this.stations.filter((s) => s.level === level); }
@@ -130,6 +239,7 @@ export class Deck {
 
   crackUp(files, issues) {
     const at = new Map(files.map((f, i) => [f[0], i]));
+    const half = (x) => this.lines.lateral(x, HOLD_Y) - 0.15;
     issues.forEach((issue, n) => {
       const rooms = (issue.files || []).map((f) => at.get(f)).filter((f) => f !== undefined && this.fileCell.has(f)).slice(0, 3);
       const long = 1 + 0.06 * Math.min(issue.comments || 0, 10);
@@ -140,22 +250,23 @@ export class Deck {
         this.cracks.push(makeCrack(r, n, f, start, clamp(Math.min(c.w, c.h) * 0.8, 0.9, 5.5) * long));
       }
       if (!rooms.length) {
-        // an issue that names no file breaks the hull itself, along the sides of the hold
+        // an issue that names no file breaks the hull itself: a crack along the side wall of the hold
         const r = rng((issue.number * 7919) ^ 0xa5a5);
-        const top = r() < 0.5, x = this.size.w * (0.12 + 0.76 * r());
-        const y = top ? -MARGIN + HOLD_RAIL + 0.1 + r() * (MARGIN - HOLD_RAIL - 0.6) : this.size.h + 0.5 + r() * (MARGIN - HOLD_RAIL - 0.6);
-        this.cracks.push(makeCrack(r, n, null, { x, y }, 3.5 * long));
+        const top = r() < 0.5, x = this.plan.x + this.plan.w * (0.1 + 0.8 * r());
+        const off = half(x) - 1.3 - r() * 0.5;
+        this.cracks.push(makeCrack(r, n, null, { x, y: this.lines.cy + (top ? -off : off) }, 3.5 * long));
       }
     });
   }
 
   /** Whether a point can be stood on at a level, at least `inset` further in than the usual edge. */
   contains(level, p, inset = 0) {
+    const { x0 } = this.lines, c = this.castle;
     switch (level) {
-      case 'hold': return hullContains(this.hull, p, HOLD_RAIL + inset);
-      case 'deck': return hullContains(this.hull, p, RAIL + inset) && !inRect(grow(this.cabin, 0.35 - inset), p);
-      case 'helm': return inRect(grow(this.cabin, -(0.4 + inset)), p);
-      case 'quarters': return inRect(grow(this.cabin, -(0.6 + inset)), p);
+      case 'hold': return hullContains(this.holdHull, p, 0.9 + inset);
+      case 'deck': return hullContains(this.hull, p, RAIL + inset) && p.x > c.x1 + 0.35 - inset;
+      case 'helm': return hullContains(this.hull, p, 0.9 + inset) && p.x >= x0 + 0.3 + inset && p.x <= c.x1 - 0.2 - inset;
+      case 'quarters': return hullContains(this.hull, p, 1.4 + inset) && p.x >= x0 + 0.6 + inset && p.x <= c.x1 - 0.6 - inset;
       default: return false;
     }
   }
@@ -163,27 +274,19 @@ export class Deck {
   /** The nearest place he may stand on that level: the point itself, or the edge it ran into (a wall is slid along). */
   clamp(level, p) {
     if (this.contains(level, p)) return { x: p.x, y: p.y };
-    if (level === 'helm' || level === 'quarters') {
-      const r = grow(this.cabin, -(level === 'helm' ? 0.4 : 0.6));
-      return { x: clamp(p.x, r.x0, r.x1), y: clamp(p.y, r.y0, r.y1) };
-    }
+    const { x0, cy } = this.lines, c = this.castle;
     let q = { x: p.x, y: p.y };
-    if (level === 'deck') {
-      const r = grow(this.cabin, 0.35);
-      if (inRect(r, q)) {
-        const sides = [[q.x - r.x0, 'x0'], [r.x1 - q.x, 'x1'], [q.y - r.y0, 'y0'], [r.y1 - q.y, 'y1']].sort((a, b) => a[0] - b[0]);
-        const side = sides[0][1];
-        q = side === 'x0' || side === 'x1' ? { x: r[side], y: q.y } : { x: q.x, y: r[side] };
-      }
-      if (this.contains('deck', q)) return q;
-    }
-    const c = { x: this.size.w * 0.55, y: this.size.h / 2 };
+    if (level === 'deck') q.x = Math.max(q.x, c.x1 + 0.4);
+    if (level === 'helm') q.x = clamp(q.x, x0 + 0.4, c.x1 - 0.3);
+    if (level === 'quarters') q.x = clamp(q.x, x0 + 0.7, c.x1 - 0.7);
+    if (this.contains(level, q)) return q;
+    const centre = { hold: { x: (this.plan.x + this.plan.w / 2), y: cy }, deck: { x: Math.max(this.size.w * 0.5, c.x1 + 8), y: cy }, helm: { x: (x0 + c.x1) / 2, y: cy }, quarters: { x: (x0 + c.x1) / 2, y: cy } }[level];
     let lo = 0, hi = 1;
     for (let i = 0; i < 24; i++) {
       const mid = (lo + hi) / 2;
-      if (this.contains(level, { x: c.x + (q.x - c.x) * mid, y: c.y + (q.y - c.y) * mid })) lo = mid; else hi = mid;
+      if (this.contains(level, { x: centre.x + (q.x - centre.x) * mid, y: centre.y + (q.y - centre.y) * mid })) lo = mid; else hi = mid;
     }
-    return { x: c.x + (q.x - c.x) * lo, y: c.y + (q.y - c.y) * lo };
+    return { x: centre.x + (q.x - centre.x) * lo, y: centre.y + (q.y - centre.y) * lo };
   }
 
   /** The room (of the hold) a point is in (index into cells), if it is in one. */

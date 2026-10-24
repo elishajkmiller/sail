@@ -4,7 +4,7 @@ import * as THREE from '../public/vendor/three.module.min.js';
 import * as treemap from '../public/js/treemap.js';
 import { Atlas } from '../public/js/atlas.js';
 import { Game } from '../public/js/game.js';
-import { hullFor } from '../public/js/deck.js';
+import { hullFor, shipLines } from '../public/js/deck.js';
 import { insetPolygon, hullGeometry, railGeometry, buildShipView, DotFleet, makeCraft, makeSea, makeSky, waveHeight, extColor, DECK_Y } from '../public/js/scene.js';
 
 const area = (pts) => Math.abs(pts.reduce((s, a, i) => { const b = pts[(i + 1) % pts.length]; return s + a.x * b.y - b.x * a.y; }, 0)) / 2;
@@ -124,7 +124,7 @@ test('the sea is cut away in the shape of the hull while he is in the hold, and 
   setSeaHole(sea, g.sea[0]);
   const u = sea.material.uniforms;
   assert.equal(u.uHoleOn.value, 1);
-  assert.ok(u.uHullN.value >= 20 && u.uHullN.value <= 24);
+  assert.ok(u.uHullN.value >= 20 && u.uHullN.value <= 96, 'the whole outline of the waterline, within what the shader holds');
   const pts = u.uHull.value.slice(0, u.uHullN.value);
   const xs = pts.map((p) => p.x), zs = pts.map((p) => p.y);
   assert.ok(Math.min(...xs) > g.sea[0].x - 4 && Math.max(...xs) > g.sea[0].x + g.sea[0].deck.size.w, 'the hole lies where the ship lies, bow past the end of the deck');
@@ -204,10 +204,11 @@ test('the sail hangs from the top of the mast, and no mast stands in or above an
   const { boat } = makeCraft();
   const [hull, mast, yard, sail] = boat.children;
   const m = box(mast), y = box(yard), s = box(sail), h = box(hull);
-  assert.ok(Math.abs(m.min.y - h.max.y) < 0.05, `the boat's mast starts on her deck, not inside the hull: ${m.min.y} vs ${h.max.y}`);
+  const deckAtMast = shipLines({ w: 9, h: 3.6 }, { castle: false }).rail(0) * 0.55;
+  assert.ok(Math.abs(m.min.y - deckAtMast) < 0.05 && m.min.y < h.max.y, `the boat's mast starts on her deck at the mast, not inside the hull: ${m.min.y} vs ${deckAtMast}`);
   assert.ok(m.max.y - y.max.y < 0.35 && m.max.y >= y.max.y - 0.01, 'the mast ends at the yard: no extra stick above the sail');
   assert.ok(Math.abs(s.max.y - y.max.y) < 0.25, 'the sail hangs from the yard');
-  assert.ok(s.min.y > h.max.y, 'and clear of her deck');
+  assert.ok(s.min.y > deckAtMast, 'and clear of her deck');
   const g = ship();
   const view = buildShipView(g.sea[0], 'sailing');
   const parts = view.group.children[0].children[3].children; // the deck props
