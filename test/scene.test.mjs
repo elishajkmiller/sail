@@ -220,3 +220,21 @@ test('the sail hangs from the top of the mast, and no mast stands in or above an
   assert.ok(tall.max.y - yardB.max.y < 0.5 && tall.max.y >= yardB.max.y - 0.01, `her mast ends at the yard: ${tall.max.y} vs ${yardB.max.y}`);
   assert.ok(Math.abs(sailB.max.y - yardB.max.y) < 0.3, 'her sail hangs from the yard');
 });
+
+test('a huge ship rocks about her middle by a small angle: her bow and stern do not go under the sea', () => {
+  const files = Array.from({ length: 6000 }, (_, i) => [`d${i % 40}/f${i}.c`, 100 + (i % 97) * 50]);
+  const g = new Game({ atlas: new Atlas(), now: () => 1_790_000_000 });
+  g.moor({ repo: { owner: 'big', name: 'kernel', fullName: 'big/kernel', stars: 9000, language: 'C', pushedAt: 1_789_000_000, archived: false, defaultBranch: 'main', can: {} }, files, partial: null, item: treemap.build(files), issues: [], moreIssues: false, checks: { total: 0, failed: [] }, notes: [] });
+  const { deck } = g.sea[0], L = deck.lines;
+  assert.ok(deck.size.h * 2.2 < deck.size.w, `she is long, not a box: ${deck.size.w} by ${deck.size.h}`);
+  for (const condition of ['sailing', 'wreck']) {
+    const view = buildShipView(g.sea[0], condition), scene = new THREE.Scene();
+    scene.add(view.group);
+    for (const t of [0, 1.1, 2.3, 4.9, 8.2, 13.7]) {
+      view.update(t, -1, null, false); scene.updateMatrixWorld(true);
+      view.update(t, -1, null, false);
+      const middle = view.floating.localToWorld(new THREE.Vector3((L.x0 + L.x1) / 2, 2.2, L.cy)).y;
+      for (const x of [L.x0, L.x1]) assert.ok(Math.abs(view.floating.localToWorld(new THREE.Vector3(x, 2.2, L.cy)).y - middle) < (condition === "wreck" ? 3.8 : 1.2), `${condition}: the end of her deck stays near the middle's height at t=${t}`);
+    }
+  }
+});

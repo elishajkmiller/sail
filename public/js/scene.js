@@ -641,10 +641,13 @@ export function buildShipView(ship, conditionName, flagTexture = null) {
     /** Rides the water, makes the seams pulse, and shows which crack is near and which is being read. */
     update(t, nearCrack, readingIssue, starred) {
       const cx = ship.x + (x0 + x1) / 2, cz = ship.y + cy;
-      const tilt = conditionName === 'wreck' ? 0.1 : 0;
-      floating.position.y = waveHeight(cx, cz, t) * 0.6 - (conditionName === 'wreck' ? 0.9 : 0);
-      floating.rotation.z = tilt + 0.012 * Math.sin(t * 0.9 + cx);
-      floating.rotation.x = 0.01 * Math.sin(t * 0.7 + cz);
+      // she rocks about the middle of her hull, and by an angle that keeps her ends within about half a metre of the heave however long she is
+      // (a fixed angle on a ship of four hundred metres would put her bow and stern under the water)
+      const pitch = Math.min(0.012, 0.55 / (L.L / 2)), roll = Math.min(0.01, 0.45 / L.bmax), list = conditionName === 'wreck' ? Math.min(0.1, 3 / (L.L / 2)) : 0;
+      floating.rotation.set(roll * Math.sin(t * 0.7 + cz), 0, list + pitch * Math.sin(t * 0.9 + cx));
+      const pivot = new THREE.Vector3((x0 + x1) / 2, 0, cy);
+      floating.position.copy(pivot).sub(pivot.clone().applyEuler(floating.rotation));
+      floating.position.y += waveHeight(cx, cz, t) * 0.6 - (conditionName === 'wreck' ? 0.9 : 0);
       const pulse = 0.55 + 0.45 * Math.sin(t * 3);
       seamMat.opacity = 0.55 + 0.4 * pulse;
       beamMat.opacity = 0.1 + 0.18 * pulse;

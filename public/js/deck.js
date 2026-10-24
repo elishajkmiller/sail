@@ -25,7 +25,8 @@ export const levelY = (level) => ({ hold: HOLD_Y, deck: DECK_Y, helm: DECK_Y + H
 /** How big the deck of a ship with this many files is: more files, a longer ship (but never a dinghy, and never a harbour). */
 export function deckSize(files) {
   const w = clamp(25 + 7 * Math.sqrt(files), 35, 300);
-  return { w, h: w * 0.42 };
+  // a long ship is not made as fat as she is long: beyond a middling size her beam grows slowly, so that a huge repo is a long ship, not a box
+  return { w, h: w <= 150 ? w * 0.42 : 63 + (w - 150) * 0.14 };
 }
 
 /**
