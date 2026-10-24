@@ -22,6 +22,8 @@ export function resolve(urlPath) {
 
 export function serve(req, res) {
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { Allow: 'GET, HEAD' }); return res.end(); }
+  // behind a path prefix the page's relative addresses need the slash
+  if ((req.url || '').split('?')[0] === '/ships') { res.writeHead(308, { Location: '/ships/' + (req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '') }); return res.end(); }
   let file = resolve(req.url || '/');
   if (file && fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, 'index.html');
   if (!file || !fs.existsSync(file)) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('not found'); }

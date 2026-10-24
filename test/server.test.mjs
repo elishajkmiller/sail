@@ -21,6 +21,10 @@ test('the page is served with a strict policy, and nothing but GET works', async
   assert.ok(/connect-src 'self' https:\/\/api\.github\.com/.test(CSP) && !CSP.includes('unsafe') && CSP.includes("script-src 'self'"));
   assert.match(idx.res.headers['content-type'], /text\/html/);
   assert.match((await get('/js/util.js')).res.headers['content-type'], /javascript/);
+  const bare = await get('/ships?open=a/b');
+  assert.equal(bare.res.statusCode, 308);
+  assert.equal(bare.res.headers.location, '/ships/?open=a/b', 'the slash is added and the query kept');
+  assert.equal((await get('/ships/')).res.statusCode, 200);
   assert.equal((await get('/nope')).res.statusCode, 404);
   assert.equal((await get('/../server.js')).res.statusCode, 404);
   assert.equal((await get('/', 'POST')).res.statusCode, 405);
