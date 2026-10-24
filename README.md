@@ -2,7 +2,7 @@
 
 Every public GitHub repo is a ship on a dusk sea. Sail your boat over a ship and you land on her main deck as a sailor. She has three storeys:
 
-- **the main deck** has the flag (star the repo), a table for every Discussion (with a token; E at a table opens the thread), the hatch down to the hold, the door of the captain's quarters and a stair up to the helm on each side
+- **the main deck** is walked by the people who found an issue or opened a pull request on the repo, each with their GitHub picture for a face and their name over them (up to fourteen; they come from the open issues and pull requests and from the live feed, and a new issue or pull request brings its person to the hatch or the stairs up to the helm). It also has the flag (star the repo), a table for every Discussion (with a token; E at a table opens the thread), the hatch down to the hold, the door of the captain's quarters and a stair up to the helm on each side
 - **the helm** is the roof of the stern castle, which is the whole back of the ship, and has the wheel: manage issues and pull requests, when you may write to the repo
 - **the captain's quarters**, inside the castle under the helm, show the owner's profile and the top contributors (a desk, and their pictures in frames on the wall)
 - **the hold**, below deck, has her files as rooms and her folders as walls, and every open issue is a glowing crack in the room it names (or in the hull, when it names no file). The deck lifts away when you go down so you see the hold from above, and only the inside of the hull is drawn
@@ -31,6 +31,7 @@ Reading needs nothing. A token raises the limits (60 to 5000 requests an hour) a
     public/js/util.js     small helpers, cleaning of text from GitHub
     public/js/github.js   everything asked of the API, scoring of neighbours
     public/js/treemap.js  the deck plan from file sizes
+    public/js/crew.js     the people on deck: who they are and where they walk
     public/js/deck.js     the storeys: hull, quarters, helm, rooms, cracks, stations (metres)
     public/js/atlas.js    the sea as found so far, placement of neighbours
     public/js/game.js     the rules (sail, land, walk, read)

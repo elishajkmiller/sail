@@ -7,10 +7,11 @@ import { Atlas } from './atlas.js';
 import { Game } from './game.js';
 import { PathIndex, condition } from './github.js';
 import * as treemap from './treemap.js';
-import { parseTarget } from './util.js';
+import { parseTarget, hash32 } from './util.js';
+import { Crew, peopleOf, rosterOf, isCrewEvent } from './crew.js';
 import { look, turn, follow, shouldFollow, recenter, DRAG, FREE } from './camera.js';
 import { Panels } from './ui.js';
-import { makeSea, makeSky, makeLights, buildShipView, DotFleet, makeCraft, LabelPool, RoomLabels, waveHeight, setSeaHole, updateSea, PixelPass, PIXEL, PALETTE } from './scene.js';
+import { CrewView, makeSea, makeSky, makeLights, buildShipView, DotFleet, makeCraft, LabelPool, RoomLabels, waveHeight, setSeaHole, updateSea, PixelPass, PIXEL, PALETTE } from './scene.js';
 import { levelY, HOLD_Y } from './deck.js';
 
 const store = {
@@ -62,6 +63,7 @@ const app = {
   setStarred(key, on) { app.starred.set(key, on); },
   setPortraits(i, urls) { const m = game.sea[i]; if (m) views.get(m.key)?.setPortraits(urls); },
   ticker: (line, cls) => panels.ticker(line, cls),
+  crewOf: (i) => { const c = crews.get(game.sea[i]?.key); return c ? [...c.crew.members].sort((a, b) => b.at - a.at) : []; },
   saveToken(t) {
     t = (t || '').trim();
     if (!/^[A-Za-z0-9_\-]{8,255}$/.test(t)) return 'that does not look like a GitHub token';
@@ -71,6 +73,8 @@ const app = {
   clearToken() { github.setToken(''); store.del('ships:token'); return 'token removed'; },
   cardClosed: () => { if (game.reading) game.reading = null; shownReading = null; },
 };
+/** The people of each opened ship (see crew.js): key -> { crew, view } */
+const crews = new Map();
 const panels = new Panels(app);
 const say = (t, bad = false) => panels.status(t, bad);
 
@@ -173,6 +177,17 @@ async function loadTalk(i) {
     game.setTalk(i, found);
     makeView(i);
   } catch { /* the tables stay as they were: a single empty one */ }
+}
+
+/** The people of a ship: those behind her open issues and open pull requests come aboard (the pull requests cost one more request). */
+async function seedCrew(i) {
+  const m = game.sea[i];
+  if (!m) return;
+  if (!crews.has(m.key)) crews.set(m.key, { crew: new Crew(m.deck, hash32(m.key)), view: new CrewView() });
+  const pulls = await github.pulls(m.repo.owner, m.repo.name).catch(() => []);
+  if (game.sea[i]?.key !== m.key) return;
+  crews.get(m.key).crew.setPeople(rosterOf({ issues: m.issues, pulls }));
+  panels.renderSide();
 }
 
 /** Her issues have changed: asked for again, and her cracks made again. */
@@ -322,8 +337,16 @@ async function pollFeed(t) {
     let reissue = false, push = false;
     const fresh = r.events.filter((e) => !feed.seen.has(e.id));
     for (const e of fresh) feed.seen.add(e.id);
-    if (first) { fresh.slice(0, 3).reverse().forEach((e) => panels.ticker(`${describe(e)} ${agoShort(e.at, game.now())}`)); return; }
+    if (!crews.has(m.key)) crews.set(m.key, { crew: new Crew(m.deck, hash32(m.key)), view: new CrewView() });
+    const people = crews.get(m.key).crew;
+    if (first) {
+      people.setPeople(peopleOf(r.events));
+      panels.renderSide();
+      fresh.slice(0, 3).reverse().forEach((e) => panels.ticker(`${describe(e)} ${agoShort(e.at, game.now())}`));
+      return;
+    }
     for (const e of fresh.reverse()) {
+      if (isCrewEvent(e)) { people.event(e); panels.renderSide(); }
       panels.ticker(describe(e), e.type === 'WatchEvent' ? 'gold' : '');
       if (e.type === 'WatchEvent') { m.repo.stars += 1; views.get(m.key)?.state.pulse?.(); }
       if (e.type === 'IssuesEvent' && ['opened', 'closed', 'reopened'].includes(e.action)) reissue = true;
@@ -411,6 +434,14 @@ function frame() {
     view.group.visible = near || !inside;
     const want = near ? game.level : null;
     if (view.level !== want) view.setLevel(want);
+    const people = crews.get(m.key);
+    if (people) {
+      people.crew.deck = m.deck;
+      people.crew.step(dt);
+      people.view.attach(view.floating);
+      people.view.group.visible = !near || (game.level !== 'hold' && game.level !== 'quarters');
+      people.view.sync(people.crew, t, near);
+    }
     view.update(t, near && game.level === 'hold' ? game.nearCrack : -1, game.reading?.ship === i ? game.reading.issue : null, !!app.starred.get(m.key));
   });
   if (game.aboard !== null && game.level === 'hold') {
@@ -447,5 +478,5 @@ if (window.parent !== window) {
 }
 const start = new URLSearchParams(location.search).get('open');
 if (start) openShip(start);
-if (new URLSearchParams(location.search).has('debug')) window.__ships = { game, camera, scene, renderer, atlas, github, cam, THREE, openShip, views, makeView };
+if (new URLSearchParams(location.search).has('debug')) window.__ships = { game, camera, scene, renderer, atlas, github, cam, THREE, openShip, views, makeView, crews, Crew, CrewView, peopleOf };
 requestAnimationFrame(frame);

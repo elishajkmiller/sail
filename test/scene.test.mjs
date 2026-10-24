@@ -240,3 +240,24 @@ test('a huge ship rocks about her middle by a small angle: her bow and stern do 
     }
   }
 });
+
+test("the crew is drawn as figures with their pictures for faces, in the ship's rocking group, and goes when the person goes", async () => {
+  const { Crew } = await import('../public/js/crew.js');
+  const { CrewView } = await import('../public/js/scene.js');
+  const g = ship(), view = buildShipView(g.sea[0], 'sailing'), crew = new Crew(g.sea[0].deck, 2), cv = new CrewView();
+  crew.setPeople([{ login: 'ann', at: 2, doing: 'found #1' }, { login: 'bo', at: 1, doing: 'opened pull #2' }]);
+  cv.attach(view.floating);
+  assert.equal(cv.group.parent, view.floating);
+  cv.sync(crew, 1, true);
+  assert.equal(cv.figs.size, 2);
+  const f = cv.figs.get('ann'), m = crew.members.find((x) => x.login === 'ann');
+  assert.ok(Math.abs(f.root.position.x - m.x) < 1e-9 && Math.abs(f.root.position.y - 2.2) < 0.1, 'she stands on the deck');
+  assert.equal(f.face.geometry.type, 'CircleGeometry', 'her face is a disc for her picture');
+  assert.ok(f.face.position.x > 0 && Math.abs(f.face.rotation.y - Math.PI / 2) < 1e-9, 'on the front of her head');
+  crew.setPeople([]);
+  crew.members = crew.members.filter((x) => x.login === 'ann');
+  cv.sync(crew, 2, false);
+  assert.equal(cv.figs.size, 1, 'bo has gone');
+  cv.dispose();
+  assert.equal(cv.group.parent, null);
+});

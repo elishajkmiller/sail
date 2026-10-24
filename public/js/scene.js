@@ -5,6 +5,7 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { MARGIN, DECK_Y, HOLD_Y, HELM_RISE, hullFor, deckSize, shipLines, waterlineFor, bowsprit } from './deck.js';
 import { hullLength } from './atlas.js';
+import { hueOf } from './crew.js';
 import { hash32, clamp } from './util.js';
 
 /** The layer the text sprites are on: the picture is drawn in big pixels without them, then they are drawn sharp on top. */
@@ -723,6 +724,77 @@ export class DotFleet {
     this.mesh.instanceMatrix.needsUpdate = true;
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
   }
+}
+
+// ---- the people of a ship (see crew.js) ----
+
+const faceTextures = new Map();
+/** A person's picture from GitHub, as a texture (the same one for every ship she is on); null until it has come, and for good if it does not. */
+function faceOf(login) {
+  if (typeof document === 'undefined') return null;
+  if (faceTextures.has(login)) return faceTextures.get(login).tex;
+  const entry = { tex: null, waiting: [] };
+  faceTextures.set(login, entry);
+  new THREE.TextureLoader().setCrossOrigin('anonymous').load(`https://avatars.githubusercontent.com/${encodeURIComponent(login)}?s=96`, (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    entry.tex = tex;
+    entry.waiting.forEach((fn) => fn(tex));
+    entry.waiting = [];
+  }, undefined, () => { entry.waiting = []; /* no picture: the face stays a plain colour */ });
+  return null;
+}
+
+/** The people of one ship as little figures, each with her GitHub picture for a face and her name over her head, standing in the ship's rocking group so that they ride her deck as the player does. */
+export class CrewView {
+  constructor() {
+    this.group = new THREE.Group();
+    this.figs = new Map();
+  }
+
+  /** Puts the figures in the ship's rocking group (again, when the view of her has been made anew). */
+  attach(host) { if (host && this.group.parent !== host) host.add(this.group); }
+
+  /** Shows `crew` (a Crew) as it is at time t. `labels`: whether the names are shown (only on the ship the player is on). */
+  sync(crew, t, labels) {
+    const here = new Set();
+    for (const m of crew.members) {
+      here.add(m.login);
+      let f = this.figs.get(m.login);
+      if (!f) { f = this.make(m.login); this.figs.set(m.login, f); this.group.add(f.root); }
+      f.root.position.set(m.x, DECK_Y + (m.moving ? Math.abs(Math.sin(t * 9 + f.phase)) * 0.06 : 0), m.y);
+      f.root.rotation.y = -m.face;
+      const text = `${m.login}|${m.doing}`;
+      if (f.text !== text) {
+        f.text = text;
+        if (f.label) { f.root.remove(f.label); f.label.material.dispose(); }
+        f.label = textSprite([m.login, m.doing], { color: ['#c9d6dc', '#d19a66'], size: 52, width: 760 });
+        if (f.label) { sizeSprite(f.label, 3.0); f.label.position.y = 2.6; f.root.add(f.label); }
+      }
+      if (f.label) f.label.visible = labels;
+    }
+    for (const [login, f] of this.figs) if (!here.has(login)) { this.group.remove(f.root); f.root.traverse((o) => { o.geometry?.dispose?.(); }); this.figs.delete(login); }
+  }
+
+  make(login) {
+    const root = new THREE.Group(), hue = hueOf(login);
+    const coat = new THREE.Color().setHSL(hue, 0.45, 0.42);
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.38, 1.1, 8), mat(coat));
+    body.position.y = 0.95;
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), mat(0xd9b38c));
+    head.position.y = 1.8;
+    // her picture is her face: a disc on the front of the head (the front of a person is +x), put on when the picture has come
+    const face = new THREE.Mesh(new THREE.CircleGeometry(0.27, 20), new THREE.MeshBasicMaterial({ color: 0xd9b38c }));
+    face.position.set(0.25, 1.8, 0);
+    face.rotation.y = Math.PI / 2;
+    const tex = faceOf(login), put = (t) => { face.material.map = t; face.material.color.set(0xffffff); face.material.needsUpdate = true; };
+    if (tex) put(tex); else faceTextures.get(login)?.waiting.push(put);
+    const legs = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.5, 8), mat(0x3a4a54));
+    legs.position.y = 0.25;
+    root.add(body, head, face, legs);
+    return { root, face, label: null, text: '', phase: (hash32(login) % 628) / 100 };
+  }
+
+  dispose() { this.group.traverse((o) => { o.geometry?.dispose?.(); if (o.material) [].concat(o.material).forEach((m) => m.dispose?.()); }); this.group.removeFromParent(); this.figs.clear(); }
 }
 
 // ---- the player ----

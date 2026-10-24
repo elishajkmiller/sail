@@ -24,6 +24,12 @@ export function ghLink(m, suffix, text) {
   return el('a', { href: `https://github.com/${owner}/${name}${suffix}`, target: '_blank', rel: 'noopener noreferrer', text });
 }
 
+/** A link to a person's page on GitHub (only for a valid login). */
+export function profileLink(login) {
+  if (!valid(login)) return el('span', { text: login });
+  return el('a', { href: `https://github.com/${login}`, target: '_blank', rel: 'noopener noreferrer', text: login });
+}
+
 /** A button that does its thing on the second press, within a few seconds, and says what it will do. */
 export function twoStep(label, armedLabel, run, cls = '') {
   let timer = 0;
@@ -99,6 +105,11 @@ export class Panels {
       kids.push(el('p', {}, ghLink(m, '', 'open on GitHub')));
       if (m.partial) kids.push(el('p', { class: 'gold', text: m.partial }));
       for (const n of m.notes) kids.push(el('p', { class: 'gold', text: n }));
+      const crew = this.app.crewOf(game.focus);
+      if (crew.length) {
+        kids.push(el('h3', { text: `On deck (${crew.length})` }), el('p', { class: 'muted', text: 'People who found an issue or opened a pull request here.' }),
+          el('ul', {}, ...crew.map((c) => el('li', {}, profileLink(c.login), el('br'), el('span', { class: 'muted', text: `${c.doing}, ${ago(c.at, now)}` })))));
+      }
       kids.push(el('h3', { text: `Cracks in the hold (${m.issues.length}${m.moreIssues ? '+' : ''} open issues)` }));
       if (!m.issues.length) kids.push(el('p', { class: 'good', text: 'none: she is sound.' }));
       else kids.push(el('p', { class: 'muted', text: 'Click one to go down to it.' }), el('ul', {}, ...m.issues.map((i) => el('li', { class: 'pick' + (game.reading?.ship === game.focus && game.reading?.issue === m.issues.indexOf(i) ? ' on' : ''), title: i.files.join('\n') || 'names no file: a crack in the hull', onclick: () => this.app.walkToIssue(m.issues.indexOf(i)) }, `#${i.number} ${i.title}`))));
