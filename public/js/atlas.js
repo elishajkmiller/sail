@@ -9,8 +9,8 @@ import { clamp, hash32, rng, valid } from './util.js';
 export const hullLength = (stars) => clamp(18 + 8 * Math.log10((stars || 0) + 10), 24, 80);
 
 /** Roughly how long (x) and how wide (y) a ship lies on the sea, for keeping hulls apart. */
-const lengthOf = (e) => hullLength(e.stars) * 1.25 + 4;
-const widthOf = (e) => hullLength(e.stars) * 0.55 + 7;
+const lengthOf = (e) => (e.len ? e.len + 8 : hullLength(e.stars) * 1.25 + 4);
+const widthOf = (e) => (e.wid ? e.wid + 10 : hullLength(e.stars) * 0.55 + 7);
 
 /** How far apart the neighbours of a ship are put: the nearest, and a step further for each fall in how tied they are. */
 export const GAP = 120;
@@ -60,6 +60,9 @@ export class Atlas {
     this.index(e);
   }
 
+  /** Her real size, once her files are known (an opened ship is longer and wider than the star-based guess), so that no one is put on top of her. */
+  setSize(e, len, wid) { e.len = len; e.wid = wid; }
+
   /** The placed ships within `reach` metres of a point that overlap an ellipse of the given size (for keeping a new ship clear of them). */
   around(x, y, reach) {
     const out = [], r = Math.ceil(reach / CELL), cx = Math.floor(x / CELL), cy = Math.floor(y / CELL);
@@ -71,7 +74,7 @@ export class Atlas {
   clearOf(self, x, y) {
     for (let pass = 0; pass < 40; pass++) {
       let moved = false;
-      for (const o of this.around(x, y, 200)) {
+      for (const o of this.around(x, y, 300)) {
         if (o === self) continue;
         const ax = (lengthOf(self) + lengthOf(o)) / 2, ay = (widthOf(self) + widthOf(o)) / 2 * 1.1;
         const dx = x - o.x, dy = y - o.y, d = Math.hypot(dx / ax, dy / ay);

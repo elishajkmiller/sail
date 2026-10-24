@@ -237,7 +237,8 @@ test('sailing over a ship of the map opens her, and lands when she is in', () =>
   assert.equal(g.events.length, 1, 'she is asked for once');
   g.moor(data('keel/hull', [['old.c', 400]], []), 'land');
   assert.equal(g.aboard, 1, 'landed once she was in');
-  assert.ok(Math.abs(g.sea[1].x + g.sea[1].deck.size.w / 2 - kin.x) < 0.01, 'she lies where the map had her');
+  const L = g.sea[1].deck.lines;
+  assert.ok(Math.abs(g.sea[1].x + (L.x0 + L.x1) / 2 - kin.x) < 0.01 && Math.abs(g.sea[1].y + L.cy - kin.y) < 0.01, 'the middle of her hull lies where the map had her');
   const busy = fresh();
   busy.canOpen = () => false;
   const o = busy.atlas.upsert({ name: 'o/p', stars: 5 });
@@ -329,4 +330,15 @@ test('the stairs are on both sides of the stern castle, each way up and down', (
     g.step(0.02, { interact: true });
     assert.equal(g.level, 'deck');
   }
+});
+
+test('two opened ships are put apart by their real size, not on top of each other', () => {
+  const g = new Game({ atlas: new Atlas(), now: () => 1_790_000_000 });
+  const files = Array.from({ length: 60 }, (_, i) => [`src/f${i}.rs`, 900 + i * 30]);
+  const a = g.moor(data('keel/one', files, []), 'fly'), b = g.moor(data('keel/two', files, []), 'fly');
+  const hull = (m) => { const L = m.deck.lines; return { cx: m.x + (L.x0 + L.x1) / 2, cy: m.y + L.cy, hl: L.L / 2, hw: L.bmax }; };
+  const A = hull(g.sea[a]), B = hull(g.sea[b]);
+  // the two hulls, as ellipses of their real length and beam, do not cross
+  const d = Math.hypot((A.cx - B.cx) / (A.hl + B.hl), (A.cy - B.cy) / (A.hw + B.hw));
+  assert.ok(d >= 1, `their hulls do not overlap (${d.toFixed(2)})`);
 });

@@ -63,8 +63,12 @@ export class Game {
     const k = key(data.repo.fullName);
     const old = this.find(data.repo.fullName);
     const entry = this.atlas.upsert({ name: data.repo.fullName, stars: data.repo.stars, language: data.repo.language, pushedAt: data.repo.pushedAt });
+    const L = deck.lines;
+    this.atlas.setSize(entry, L.L, 2 * L.bmax);
     if (!this.atlas.placed(entry)) this.atlas.placeFree(entry, this.sea.length ? this.boat.x : 0, this.sea.length ? this.boat.y : 0);
-    const moored = { key: k, ...data, deck, x: entry.x - deck.size.w / 2, y: entry.y - deck.size.h / 2 };
+    else if (old < 0) { const c = this.atlas.clearOf(entry, entry.x, entry.y); if (Math.hypot(c.x - entry.x, c.y - entry.y) > 0.5) this.atlas.setPlace(entry, c.x, c.y); }
+    // her place in the atlas is the middle of her hull
+    const moored = { key: k, ...data, deck, x: entry.x - (L.x0 + L.x1) / 2, y: entry.y - L.cy };
     let at = old;
     if (old >= 0) { moored.x = this.sea[old].x; moored.y = this.sea[old].y; this.sea[old] = moored; } else { this.sea.push(moored); at = this.sea.length - 1; }
     this.asked.add(k);
