@@ -8,8 +8,9 @@ import { Game } from './game.js';
 import { PathIndex, condition } from './github.js';
 import * as treemap from './treemap.js';
 import { parseTarget } from './util.js';
+import { look, turn, follow, shouldFollow, DRAG, FREE } from './camera.js';
 import { Panels } from './ui.js';
-import { makeSea, makeSky, makeLights, buildShipView, DotFleet, makeCraft, LabelPool, RoomLabels, waveHeight, setSeaHole, PALETTE } from './scene.js';
+import { makeSea, makeSky, makeLights, buildShipView, DotFleet, makeCraft, LabelPool, RoomLabels, waveHeight, setSeaHole, updateSea, PALETTE } from './scene.js';
 import { levelY, HOLD_Y } from './deck.js';
 
 const store = {
@@ -42,7 +43,7 @@ scene.add(fleet.mesh);
 const craft = makeCraft();
 scene.add(craft.boat, craft.person);
 const shipLabels = new LabelPool(scene, 12);
-const roomLabels = new RoomLabels(scene);
+const roomLabels = new RoomLabels();
 
 // ---- the panels ----
 
@@ -195,6 +196,7 @@ addEventListener('keydown', (e) => {
   if (typing()) { if (e.code === 'Escape') document.activeElement.blur(); return; }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.code === 'Space') e.preventDefault();
+  if (e.code === 'KeyC' && !e.repeat) { toggleFreeLook(); return; }
   if (!down.has(e.code)) pressed.add(e.code);
   down.add(e.code);
 });
@@ -202,21 +204,38 @@ addEventListener('keyup', (e) => down.delete(e.code));
 addEventListener('blur', () => down.clear());
 
 const cam = { yaw: 0, pitch: 0.42, zoom: 1, lastDrag: -10, x: 0, y: 0, z: 0 };
+const nowS = () => performance.now() / 1000;
 let drag = null;
-canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, moved: 0 }; canvas.setPointerCapture(e.pointerId); });
+// the mouse turns the camera three ways: drag with either button, free look (the pointer is held by the page: move the mouse, nothing pressed;
+// C or the button, Esc to stop), and Q and E from the keyboard
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, moved: 0, button: e.button }; canvas.setPointerCapture(e.pointerId); canvas.classList.add('dragging'); });
 canvas.addEventListener('pointermove', (e) => {
+  if (document.pointerLockElement === canvas) { look(cam, e.movementX, e.movementY, FREE, nowS()); return; }
   if (!drag) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.x = e.clientX; drag.y = e.clientY; drag.moved += Math.abs(dx) + Math.abs(dy);
-  if (drag.moved > 6) { cam.yaw += dx * 0.006; cam.pitch = Math.min(1.3, Math.max(0.08, cam.pitch + dy * 0.004)); cam.lastDrag = performance.now() / 1000; }
+  if (drag.moved > 4) look(cam, dx, dy, DRAG, nowS());
 });
 canvas.addEventListener('pointerup', (e) => {
   const was = drag; drag = null;
-  if (!was || was.moved > 6) return;
+  canvas.classList.remove('dragging');
+  if (!was || was.moved > 4 || was.button !== 0 || document.pointerLockElement === canvas) return;
   const p = pickWorld(e.clientX, e.clientY);
   if (p) game.click(p, e.detail >= 2);
 });
 canvas.addEventListener('wheel', (e) => { e.preventDefault(); cam.zoom = Math.min(5, Math.max(0.35, cam.zoom * Math.exp(e.deltaY * 0.001))); }, { passive: false });
+const lookButton = document.getElementById('look');
+function toggleFreeLook() {
+  if (document.pointerLockElement === canvas) { document.exitPointerLock(); return; }
+  try { const r = canvas.requestPointerLock(); if (r && r.catch) r.catch(() => say('the browser did not allow free look here', true)); } catch { say('the browser did not allow free look here', true); }
+}
+lookButton.addEventListener('click', toggleFreeLook);
+document.addEventListener('pointerlockchange', () => {
+  const on = document.pointerLockElement === canvas;
+  lookButton.textContent = on ? 'Free look: on (Esc)' : 'Free look (C)';
+  canvas.classList.toggle('freelook', on);
+});
 
 const ray = new THREE.Raycaster(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 function pickWorld(cx, cy) {
@@ -242,6 +261,7 @@ function readInput() {
 
 // ---- one frame ----
 
+const eye = new THREE.Vector3();
 let last = performance.now() / 1000;
 let shownReading = null;
 const feed = { key: null, etag: '', seen: null, next: 0, busy: false };
@@ -322,24 +342,25 @@ function frame() {
   craft.person.visible = !!h;
   let tx, ty, tz;
   if (h) {
-    const m = game.sea[game.aboard];
-    const floatY = (m ? waveHeight(m.x + m.deck.size.w / 2, m.y + m.deck.size.h / 2, t) * 0.6 : 0) - (m && game.conditionOf(game.aboard) === 'wreck' ? 0.9 : 0);
+    // he stands IN the ship's rocking group, in her own coordinates, so that he heaves and tilts with her deck and never clips into it
+    const m = game.sea[game.aboard], host = views.get(m.key)?.floating;
     const walking = !!(game.walkTo || down.has('KeyW') || down.has('KeyA') || down.has('KeyS') || down.has('KeyD'));
-    const stand = floatY + levelY(h.level);
-    craft.person.position.set(h.x, stand + (walking ? Math.abs(Math.sin(t * 10)) * 0.06 : 0), h.y);
+    if (host && craft.person.parent !== host) host.add(craft.person);
+    craft.person.position.set(h.x - m.x, levelY(h.level) + (walking ? Math.abs(Math.sin(t * 10)) * 0.06 : 0), h.y - m.y);
     craft.person.rotation.y = -h.face;
-    [tx, ty, tz] = [h.x, stand + 1.6, h.y];
+    craft.person.updateWorldMatrix(true, false);
+    craft.person.getWorldPosition(eye);
+    [tx, ty, tz] = [eye.x, eye.y + 1.6, eye.z];
   } else {
+    if (craft.person.parent !== scene) scene.add(craft.person);
     const wy = waveHeight(b.x, b.y, t) * 0.6;
     craft.boat.position.set(b.x, wy + 0.1, b.y);
     craft.boat.rotation.set(0.04 * Math.sin(t * 1.3), -b.heading, 0.05 * Math.sin(t * 0.9), 'YXZ');
     [tx, ty, tz] = [b.x, wy + 1.5, b.y];
   }
   // the camera follows from behind, higher up the further out it is
-  if (!h && t - cam.lastDrag > 1.2) {
-    let d = b.heading - cam.yaw; d = Math.atan2(Math.sin(d), Math.cos(d));
-    cam.yaw += d * (1 - Math.exp(-1.6 * dt));
-  }
+  turn(cam, (down.has('KeyX') ? 1 : 0) - (down.has('KeyZ') ? 1 : 0), dt, t);
+  if (shouldFollow(cam, t, { onFoot: !!h, freeLook: document.pointerLockElement === canvas })) follow(cam, b.heading, dt);
   const dist = (h ? (h.level === 'quarters' ? 6.5 : 9) : 26) * cam.zoom;
   cam.x += (tx - cam.x) * (1 - Math.exp(-8 * dt)); cam.y += (ty - cam.y) * (1 - Math.exp(-8 * dt)); cam.z += (tz - cam.z) * (1 - Math.exp(-8 * dt));
   camera.position.set(cam.x - Math.cos(cam.yaw) * Math.cos(cam.pitch) * dist, cam.y + Math.sin(cam.pitch) * dist, cam.z - Math.sin(cam.yaw) * Math.cos(cam.pitch) * dist);
@@ -348,6 +369,7 @@ function frame() {
   // the world
   sea.position.set(Math.round(camera.position.x / 12.5) * 12.5, 0, Math.round(camera.position.z / 12.5) * 12.5);
   sea.material.uniforms.uTime.value = t;
+  updateSea(sea, camera, renderer);
   setSeaHole(sea, game.aboard !== null && game.level === 'hold' ? game.sea[game.aboard] : null);
   sky.position.copy(camera.position);
   const loaded = new Set(game.sea.map((m) => m.key));
@@ -362,14 +384,17 @@ function frame() {
     if (view.level !== want) view.setLevel(want);
     view.update(t, near && game.level === 'hold' ? game.nearCrack : -1, game.reading?.ship === i ? game.reading.issue : null, !!app.starred.get(m.key));
   });
-  if (game.aboard !== null && game.level === 'hold') roomLabels.update(game.sea[game.aboard], { x: game.human.x - game.sea[game.aboard].x, y: game.human.y - game.sea[game.aboard].y }, t, waveHeight(game.human.x, game.human.y, t) * 0.6 + HOLD_Y);
-  else roomLabels.group.children.forEach((s) => { s.visible = false; });
+  if (game.aboard !== null && game.level === 'hold') {
+    const m = game.sea[game.aboard];
+    roomLabels.attach(views.get(m.key)?.floating, m.key);
+    roomLabels.update(m, { x: game.human.x - m.x, y: game.human.y - m.y }, HOLD_Y);
+  } else roomLabels.detach();
 
   panels.prompt(game.prompt);
   const levelHint = { deck: 'the main deck: the flag, the tavern table, the hatch down to the hold, the door under the helm, the stairs up', hold: 'the hold: the cracks are here, and the files', helm: 'the helm: the wheel', quarters: "the captain's quarters" }[game.level];
   document.getElementById('hint').textContent = game.aboard !== null
-    ? `${levelHint}  -  W A S D walk, Shift run, click to walk, E to use what is beside you, Space back to your boat, drag to look, wheel to zoom`
-    : 'W S sail  -  A D steer  -  Shift boost  -  sail over a ship to land on her  -  double-click a ship to board  -  drag to look, wheel to zoom';
+    ? `${levelHint}  -  W A S D walk, Shift run, click to walk, E to use what is beside you, Space back to your boat, mouse: drag to look or C for free look, Z X turn the camera, wheel zooms`
+    : 'W S sail  -  A D steer  -  Shift boost  -  sail over a ship to land on her  -  double-click a ship to board  -  mouse: drag to look or C for free look, Z X turn the camera, wheel zooms';
   pollFeed(t);
   renderer.render(scene, camera);
   requestAnimationFrame(frame);

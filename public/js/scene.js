@@ -29,7 +29,14 @@ vec2 waveSlope(vec2 p, float t) {
 
 const hex = (c) => new THREE.Color(c);
 
-/** The sea: a big plane that follows the camera, waves in the vertex shader, sky and the low sun in the fragment shader. */
+/** The pixel the sea is drawn in, in screen pixels (made bigger on a sharp screen so that it looks the same). */
+export const SEA_PIXEL = 4;
+
+/**
+ * The sea: a big plane that follows the camera, waves in the vertex shader (the hulls ride these), and a pixel-art look in the fragment
+ * shader: the colour of each block of screen pixels is worked out once, from where its ray meets the water, then cut into a few flat bands;
+ * the crests are hard white pixels, the sun is a hard glint, the fog is banded, and the water moves in jumps five times a second.
+ */
 export function makeSea() {
   const geo = new THREE.PlaneGeometry(3200, 3200, 256, 256);
   geo.rotateX(-Math.PI / 2);
@@ -37,24 +44,24 @@ export function makeSea() {
     uniforms: {
       uTime: { value: 0 }, uSun: { value: new THREE.Vector3(-0.6, 0.18, -0.5).normalize() },
       uDeep: { value: hex(PALETTE.deep) }, uShallow: { value: hex(PALETTE.shallow) }, uHorizon: { value: hex(PALETTE.horizon) }, uZenith: { value: hex(PALETTE.zenith) },
-      uFog: { value: hex(0x2a3238) },
+      uFog: { value: hex(0x2a3238) }, uFoam: { value: hex(0xd6ecf1) }, uGlint: { value: hex(0xffd29a) },
+      uInvVP: { value: new THREE.Matrix4() }, uRes: { value: new THREE.Vector2(1400, 900) }, uPixel: { value: SEA_PIXEL },
       // a hole in the sea where a hull is, while he is below deck in it (the hold is under the water line): the hull's outline, in the world
       uHoleOn: { value: 0 }, uHullN: { value: 0 }, uHull: { value: Array.from({ length: 24 }, () => new THREE.Vector2()) },
     },
     vertexShader: `${WAVES}
-      uniform float uTime; varying vec3 vWorld; varying vec3 vNormal;
+      uniform float uTime; varying vec3 vWorld;
       void main() {
         vec4 w = modelMatrix * vec4(position, 1.0);
         w.y += wave(w.xz, uTime);
-        vec2 s = waveSlope(w.xz, uTime);
-        vNormal = normalize(vec3(-s.x, 1.0, -s.y));
         vWorld = w.xyz;
         gl_Position = projectionMatrix * viewMatrix * w;
       }`,
-    fragmentShader: `
-      uniform vec3 uSun; uniform vec3 uDeep; uniform vec3 uShallow; uniform vec3 uHorizon; uniform vec3 uZenith; uniform vec3 uFog;
+    fragmentShader: `${WAVES}
+      uniform float uTime; uniform vec3 uSun; uniform vec3 uDeep; uniform vec3 uShallow; uniform vec3 uHorizon; uniform vec3 uZenith; uniform vec3 uFog;
+      uniform vec3 uFoam; uniform vec3 uGlint; uniform mat4 uInvVP; uniform vec2 uRes; uniform float uPixel;
       uniform float uHoleOn; uniform int uHullN; uniform vec2 uHull[24];
-      varying vec3 vWorld; varying vec3 vNormal;
+      varying vec3 vWorld;
       void main() {
         if (uHoleOn > 0.5) {
           vec2 p = vWorld.xz;
@@ -67,23 +74,54 @@ export function makeSea() {
           }
           if (inside) discard;
         }
-        vec3 N = normalize(vNormal);
-        vec3 V = normalize(cameraPosition - vWorld);
+        float tt = floor(uTime * 5.0) / 5.0;
+        // the ray through the middle of this block of pixels, and where it meets the water (once more, for the height of the wave there)
+        vec2 ndc = (floor(gl_FragCoord.xy / uPixel) * uPixel + 0.5 * uPixel) / uRes * 2.0 - 1.0;
+        vec4 n0 = uInvVP * vec4(ndc, -1.0, 1.0); n0 /= n0.w;
+        vec4 f0 = uInvVP * vec4(ndc, 1.0, 1.0); f0 /= f0.w;
+        vec3 dir = normalize(f0.xyz - n0.xyz);
+        vec3 P = vWorld;
+        if (dir.y < -0.003) {
+          float t = -cameraPosition.y / dir.y;
+          P = cameraPosition + dir * t;
+          t = (wave(P.xz, tt) - cameraPosition.y) / dir.y;
+          P = cameraPosition + dir * t;
+        }
+        float h = wave(P.xz, tt);
+        vec2 s = waveSlope(P.xz, tt);
+        vec3 N = normalize(vec3(-s.x, 1.0, -s.y));
+        vec3 V = normalize(cameraPosition - P);
+        // flat bands of water colour by how high the wave is, and of sky colour by how much it mirrors
+        float tone = floor(clamp(0.5 + 0.5 * h / 0.8, 0.0, 1.0) * 5.0) / 5.0;
+        vec3 col = mix(uDeep, uShallow, tone);
         float fres = pow(1.0 - max(dot(N, V), 0.0), 3.0);
         vec3 refl = reflect(-V, N);
-        vec3 sky = mix(uHorizon, uZenith, pow(clamp(refl.y, 0.0, 1.0), 0.5));
-        vec3 col = mix(mix(uDeep, uShallow, 0.35 + 0.35 * N.y * N.y), sky, clamp(fres * 0.85 + 0.05, 0.0, 1.0));
-        float spec = pow(max(dot(reflect(-uSun, N), V), 0.0), 90.0);
-        col += vec3(1.0, 0.78, 0.5) * spec * 0.9;
-        float d = length(cameraPosition - vWorld);
-        float fog = 1.0 - exp(-d * d * 0.0000009);
-        gl_FragColor = vec4(mix(col, uFog, clamp(fog, 0.0, 1.0)), 1.0);
+        vec3 sky = mix(uHorizon, uZenith, floor(clamp(refl.y, 0.0, 1.0) * 4.0) / 4.0);
+        col = mix(col, sky, floor(clamp(fres * 1.2, 0.0, 1.0) * 4.0) / 4.0 * 0.8);
+        // crests are white pixels, in a broken pattern; the sun is a hard glint
+        float broken = wave(P.xz * 1.9 + vec2(3.1, 1.7), tt * 1.4);
+        if (h > 0.42 && broken > 0.14) col = uFoam;
+        if (pow(max(dot(reflect(-uSun, N), V), 0.0), 60.0) > 0.45) col = uGlint;
+        float d = length(cameraPosition - P);
+        float fog = floor(clamp(1.0 - exp(-d * d * 0.0000009), 0.0, 1.0) * 6.0) / 6.0;
+        gl_FragColor = vec4(mix(col, uFog, fog), 1.0);
         #include <colorspace_fragment>
       }`,
   });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
   return mesh;
+}
+
+/** Tells the sea shader where the camera is and how big the screen is (call each frame, after the camera has moved). */
+export function updateSea(sea, camera, renderer) {
+  const u = sea.material.uniforms;
+  camera.updateMatrixWorld();
+  u.uInvVP.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
+  const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+  u.uRes.value.copy(size);
+  // the same size of pixel on a sharp screen (its pixels are smaller)
+  u.uPixel.value = Math.max(2, Math.round(SEA_PIXEL * (renderer.getPixelRatio?.() ?? 1)));
 }
 
 /** Cuts a hole in the sea the shape of a ship's hull (so that her hold, below the water line, can be seen from above), or closes it (null). */
@@ -106,7 +144,7 @@ export function makeSky() {
     fragmentShader: `uniform vec3 uSun; uniform vec3 uHorizon; uniform vec3 uZenith; varying vec3 vDir;
       void main() {
         float y = max(vDir.y, 0.0);
-        vec3 col = mix(uHorizon, uZenith, pow(y, 0.45));
+        vec3 col = mix(uHorizon, uZenith, floor(pow(y, 0.45) * 9.0) / 9.0);
         float s = max(dot(normalize(vDir), uSun), 0.0);
         col += vec3(1.0, 0.7, 0.4) * (pow(s, 600.0) * 2.0 + pow(s, 12.0) * 0.35);
         gl_FragColor = vec4(col, 1.0);
@@ -431,6 +469,8 @@ export function buildShipView(ship, conditionName, flagTexture = null) {
   const state = { ring, flag: cloth, beams: beamMeshes, seamMat, frames, leak };
   return {
     group,
+    /** The part that heaves and rocks with the waves: whatever stands on her (the sailor, the labels of the rooms) is put in this, so it moves with her. */
+    floating,
     deck,
     state,
     setLevel,
@@ -569,11 +609,24 @@ export class LabelPool {
   }
 }
 
-/** A floating text over a point in the world (room names near the player). */
+/** The names of the rooms near the sailor, written over them. They are put in the ship's own rocking group, so that they move with her. */
 export class RoomLabels {
-  constructor(parent, n = 28) { this.group = new THREE.Group(); parent.add(this.group); this.n = n; this.pool = new Map(); }
+  constructor(n = 28) { this.group = new THREE.Group(); this.n = n; this.pool = new Map(); this.owner = null; }
 
-  update(ship, local, time, baseY) {
+  /** Moves the labels onto a ship (her `floating` group); a different ship starts with none. */
+  attach(host, ownerKey) {
+    if (this.owner !== ownerKey) {
+      for (const s of this.pool.values()) { this.group.remove(s); s.material.map = null; s.material.dispose(); }
+      this.pool.clear();
+      this.owner = ownerKey;
+    }
+    if (this.group.parent !== host) host?.add(this.group);
+  }
+
+  detach() { this.group.parent?.remove(this.group); }
+
+  /** `local`: where he stands in the ship's own coordinates; `floorY`: the height of the floor he stands on. */
+  update(ship, local, floorY) {
     if (typeof document === 'undefined') return;
     const near = ship.deck.cells
       .filter((c) => c.file !== null && Math.abs(c.rect.x + c.rect.w / 2 - local.x) < 22 && Math.abs(c.rect.y + c.rect.h / 2 - local.y) < 22 && c.rect.w > 1.6 && c.rect.h > 0.9)
@@ -590,7 +643,7 @@ export class RoomLabels {
         this.pool.set(c.file, s);
       }
       s.visible = true;
-      s.position.set(ship.x + c.rect.x + c.rect.w / 2, baseY + 0.6, ship.y + c.rect.y + c.rect.h / 2);
+      s.position.set(c.rect.x + c.rect.w / 2, floorY + 0.6, c.rect.y + c.rect.h / 2);
     }
   }
 }

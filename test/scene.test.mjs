@@ -97,8 +97,8 @@ test('the sea, the sky and the sailor build, and the water height is the shader 
 
 test('the room labels take the height of the floor they stand on, and the storeys show and hide as they should', async () => {
   const { RoomLabels } = await import('../public/js/scene.js');
-  const labels = new RoomLabels(new THREE.Scene());
-  assert.doesNotThrow(() => labels.update(ship().sea[0], { x: 5, y: 5 }, 0, -2.2), 'a label update needs no browser');
+  const labels = new RoomLabels();
+  assert.doesNotThrow(() => labels.update(ship().sea[0], { x: 5, y: 5 }, -2.2), 'a label update needs no browser');
   const g = ship();
   const view = buildShipView(g.sea[0], 'sailing');
   const groups = view.group.children[0].children; // hull, hold, deck, props, cabin, helm, quarters
@@ -131,4 +131,45 @@ test('the sea is cut away in the shape of the hull while he is in the hold, and 
   assert.ok(Math.min(...zs) > g.sea[0].y - 4 && Math.max(...zs) < g.sea[0].y + g.sea[0].deck.size.h + 4);
   setSeaHole(sea, null);
   assert.equal(u.uHoleOn.value, 0);
+});
+
+test('whatever stands on a ship is put in her rocking group and moves with her tilt, not only with her heave', () => {
+  const g = ship();
+  const view = buildShipView(g.sea[0], 'sailing');
+  const { person } = makeCraft();
+  view.floating.add(person);
+  person.position.set(30, 2.2, 8);
+  const scene = new THREE.Scene();
+  scene.add(view.group);
+  const height = (t) => { view.update(t, -1, null, false); scene.updateMatrixWorld(true); return person.getWorldPosition(new THREE.Vector3()).y; };
+  const deckAt = (t) => { view.update(t, -1, null, false); scene.updateMatrixWorld(true); return view.floating.localToWorld(new THREE.Vector3(30, 2.2, 8)).y; };
+  for (const t of [0, 1.3, 2.9, 5.1, 7.7]) assert.ok(Math.abs(height(t) - deckAt(t)) < 1e-9, `at t=${t} he is on the deck, not beside it`);
+  assert.ok(Math.abs(deckAt(1.3) - deckAt(5.1)) > 0.05, 'and the deck really does move');
+  // a point far down the deck swings more than one by the middle: that is the tilt a world-space sailor would clip through
+  view.update(1.3, -1, null, false); scene.updateMatrixWorld(true);
+  const far = view.floating.localToWorld(new THREE.Vector3(34, 2.2, 8)).y - view.floating.localToWorld(new THREE.Vector3(2, 2.2, 8)).y;
+  view.update(4.1, -1, null, false); scene.updateMatrixWorld(true);
+  const far2 = view.floating.localToWorld(new THREE.Vector3(34, 2.2, 8)).y - view.floating.localToWorld(new THREE.Vector3(2, 2.2, 8)).y;
+  assert.ok(Math.abs(far - far2) > 0.05, 'the deck is not level while she rocks');
+});
+
+test('the sea knows the camera and the screen, so that each block of pixels can be worked out from where its ray meets the water', async () => {
+  const { updateSea, SEA_PIXEL } = await import('../public/js/scene.js');
+  const sea = makeSea();
+  const cam = new THREE.PerspectiveCamera(60, 1400 / 900, 0.3, 5000);
+  cam.position.set(10, 12, -30);
+  cam.lookAt(10, 0, 0);
+  const fakeRenderer = { getDrawingBufferSize: (v) => v.set(1400, 900), getPixelRatio: () => 1 };
+  updateSea(sea, cam, fakeRenderer);
+  const u = sea.material.uniforms;
+  assert.deepEqual([u.uRes.value.x, u.uRes.value.y, u.uPixel.value], [1400, 900, SEA_PIXEL]);
+  // the inverse of the view-projection takes the middle of the screen, far end, back to a point on the line the camera is looking along
+  const near = new THREE.Vector4(0, 0, -1, 1).applyMatrix4(u.uInvVP.value), far = new THREE.Vector4(0, 0, 1, 1).applyMatrix4(u.uInvVP.value);
+  const dir = new THREE.Vector3(far.x / far.w - near.x / near.w, far.y / far.w - near.y / near.w, far.z / far.w - near.z / near.w).normalize();
+  assert.ok(dir.y < 0 && Math.abs(dir.x) < 0.01 && dir.z > 0, `looks down and forward: ${dir.toArray()}`);
+  // where that ray meets the water, as the shader works it out
+  const t = -cam.position.y / dir.y, hit = cam.position.clone().addScaledVector(dir, t);
+  assert.ok(Math.abs(hit.x - 10) < 0.05 && Math.abs(hit.y) < 1e-6 && hit.z > -30 && hit.z < 1, `a point of the water in front of the camera: ${hit.toArray()}`);
+  updateSea(sea, cam, { getDrawingBufferSize: (v) => v.set(2800, 1800), getPixelRatio: () => 2 });
+  assert.equal(u.uPixel.value, SEA_PIXEL * 2, 'the same size of pixel on a sharp screen');
 });
