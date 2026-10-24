@@ -277,7 +277,7 @@ export function hullSkinGeometry(lines, wood = new THREE.Color(0x8a6240), { maxS
   const top0 = rail(x0), bottom0 = -keel(x0);
   pos.push(x0, (top0 + bottom0) / 2, cy);
   col.push(wood.r * 0.9, wood.g * 0.9, wood.b * 0.9);
-  for (let j = 0; j < W - 1; j++) idx.push(mid, j, j + 1);
+  for (let j = 0; j < W; j++) idx.push(mid, j, (j + 1) % W);
   if (lid) {
     // a deck laid over her, for the ships seen from far off and for the boat, which are never entered
     const base = pos.length / 3;
@@ -730,15 +730,15 @@ export function makeCraft() {
   hull.position.set(-(lines.x0 + lines.x1) / 2 * 0.55 + 0.6, 0, -lines.cy * 0.55);
   boat.add(hull);
   // the mast stands on her deck, ends at the yard, and the sail hangs from the yard
-  const base = lines.rail(0) * 0.55, top = base + 4.4;
+  const base = lines.rail(0) * 0.55, top = base + 6.4;
   const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.14, top - base, 6), mat(0x4a3320));
   mast.position.set(0, (base + top) / 2, 0);
   const yard = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 4.6, 6), mat(0x4a3320));
   yard.rotation.x = Math.PI / 2;
   yard.position.set(0.05, top - 0.15, 0);
-  const sail = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 4.2), mat(0xe8dcc0, { side: THREE.DoubleSide, transparent: true, opacity: 0.94 }));
+  const sail = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 3.6), mat(0xe8dcc0, { side: THREE.DoubleSide, transparent: true, opacity: 0.94 }));
   sail.rotation.y = Math.PI / 2;
-  sail.position.set(0.1, top - 0.15 - 2.1, 0);
+  sail.position.set(0.1, top - 0.15 - 1.8, 0);
   boat.add(mast, yard, sail);
 
   const person = new THREE.Group();

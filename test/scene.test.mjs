@@ -208,7 +208,7 @@ test('the sail hangs from the top of the mast, and no mast stands in or above an
   assert.ok(Math.abs(m.min.y - deckAtMast) < 0.05 && m.min.y < h.max.y, `the boat's mast starts on her deck at the mast, not inside the hull: ${m.min.y} vs ${deckAtMast}`);
   assert.ok(m.max.y - y.max.y < 0.35 && m.max.y >= y.max.y - 0.01, 'the mast ends at the yard: no extra stick above the sail');
   assert.ok(Math.abs(s.max.y - y.max.y) < 0.25, 'the sail hangs from the yard');
-  assert.ok(s.min.y > deckAtMast, 'and clear of her deck');
+  assert.ok(s.min.y > deckAtMast + 1.5, 'and well clear of her deck: the foot of the sail does not touch the floor');
   const g = ship();
   const view = buildShipView(g.sea[0], 'sailing');
   const parts = view.group.children[0].children[3].children; // the deck props
