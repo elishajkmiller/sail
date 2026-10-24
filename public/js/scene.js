@@ -3,7 +3,7 @@
 // The colours are the Odysseus app's: its blue-grey night, pale cyan and warm gold, with the red it uses for trouble.
 
 import * as THREE from '../vendor/three.module.min.js';
-import { MARGIN, DECK_Y, HOLD_Y, HELM_RISE, hullFor, deckSize, shipLines, waterlineFor } from './deck.js';
+import { MARGIN, DECK_Y, HOLD_Y, HELM_RISE, hullFor, deckSize, shipLines, waterlineFor, bowsprit } from './deck.js';
 import { hullLength } from './atlas.js';
 import { hash32, clamp } from './util.js';
 
@@ -577,16 +577,16 @@ export function buildShipView(ship, conditionName, flagTexture = null) {
     stump.rotation.z = 0.35;
     propsG.add(stump);
   }
-  // the bowsprit grows out of the stem, from a place well back where the hull is wider than the spar, and ends in a ball; a ship that is
-  // longer has a longer, thicker one (the hull is a point at her very tip, so nothing is hung there)
-  const kb = clamp(k, 1, 3), bowLen = clamp(L.L * 0.08, 5, 36), bowTilt = 0.22, back = 3 * kb;
-  const bowStart = { x: x1 - back, y: L.rail(x1 - back) - 0.7 * kb };
-  const sprit = new THREE.Mesh(new THREE.CylinderGeometry(0.12 * kb, 0.28 * kb, bowLen, 6), timber);
+  // the bowsprit stands on the deck, on a foot of its own, and rises over the stem to run out ahead of the bow, ending in a ball; she is
+  // longer, so it is longer and thicker (the flag stands aft of its foot, so that the two do not meet)
+  const kb = clamp(k, 1, 3), reach = clamp(L.L * 0.08, 5, 36), foot = { x: x1 - bowsprit(L).back, y: DECK_Y + 0.5 * kb };
+  const over = L.rail(x1) + 0.5 * kb, bowTilt = Math.atan2(over - foot.y, x1 - foot.x), run = (x1 - foot.x) / Math.cos(bowTilt) + reach;
+  const sprit = new THREE.Mesh(new THREE.CylinderGeometry(0.12 * kb, 0.28 * kb, run, 6), timber);
   sprit.rotation.z = -Math.PI / 2 + bowTilt;
-  sprit.position.set(bowStart.x + Math.cos(bowTilt) * bowLen / 2, bowStart.y + Math.sin(bowTilt) * bowLen / 2, cy);
+  sprit.position.set(foot.x + Math.cos(bowTilt) * run / 2, foot.y + Math.sin(bowTilt) * run / 2, cy);
   const figure = new THREE.Mesh(new THREE.SphereGeometry(0.3 * kb, 8, 6), new THREE.MeshBasicMaterial({ color: 0xd19a66 }));
-  figure.position.set(bowStart.x + Math.cos(bowTilt) * bowLen, bowStart.y + Math.sin(bowTilt) * bowLen, cy);
-  propsG.add(sprit, figure);
+  figure.position.set(foot.x + Math.cos(bowTilt) * run, foot.y + Math.sin(bowTilt) * run, cy);
+  propsG.add(sprit, figure, box(1.0 * kb, 0.3 * kb, 1.0 * kb, foot.x, DECK_Y + 0.15 * kb, cy, dark));
   const flagSt = deck.station('flag');
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07 * kf, 0.09 * kf, 9 * kf, 6), mat(0xcccccc));
   pole.position.set(flagSt.x, DECK_Y + 4.5 * kf, flagSt.y);

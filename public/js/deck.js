@@ -64,6 +64,9 @@ export function shipLines({ w, h }, { castle = true } = {}) {
   return { cy, x0, x1, L, bmax, xs, beam, keel, rail, lateral, bow, castleX1, castleTop };
 }
 
+/** Where the bowsprit stands on the deck: how far aft of the stem her foot is. */
+export function bowsprit(lines) { return { back: clamp(lines.L * 0.1, 7, 30) }; }
+
 /** The hull seen from above at the main deck (the line the rail stands on), going clockwise (y down). */
 export function hullFor(size) {
   const { cy, x0, x1, xs, beam } = shipLines(size);
@@ -180,9 +183,8 @@ export class Deck {
     this.hatch = hatch;
     this.mast = { x: Math.max(w * 0.42, hatch.x + 6), y: cy };
     const sy = beam(xc1 + 4) - 2.6;
-    // the flag stands where the bow has narrowed to a few metres
-    let fx = x1;
-    while (fx > x0 && hullDepth(this.hull, { x: fx, y: cy }) < 2.6) fx -= 0.25;
+    // the flag stands just aft of the foot of the bowsprit, on the middle line, clear of it
+    const fx = x1 - bowsprit(this.lines).back - 5;
     const at = (level, id, x, y, label, to) => ({ id, level, x, y, label, ...(to ? { to } : {}) });
     this.stations = [
       at('deck', 'flag', fx, cy, 'the flag'),
