@@ -1,0 +1,386 @@
+// The page: loads ships from GitHub, grows the sea around them, runs the camera and the keys, draws, and keeps the ship you are on live.
+// The rules are in game.js, the pictures in scene.js, the panels in ui.js, GitHub in github.js. The token lives in this browser only.
+
+import * as THREE from '../vendor/three.module.min.js';
+import { Github } from './github.js';
+import { Atlas } from './atlas.js';
+import { Game } from './game.js';
+import { PathIndex, condition } from './github.js';
+import * as treemap from './treemap.js';
+import { parseTarget } from './util.js';
+import { Panels } from './ui.js';
+import { makeSea, makeSky, makeLights, buildShipView, DotFleet, makeCraft, LabelPool, RoomLabels, waveHeight, DECK_Y, PALETTE } from './scene.js';
+
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* private window: nothing is kept */ } },
+  del(k) { try { localStorage.removeItem(k); } catch { /* nothing to do */ } },
+};
+
+const github = new Github({ token: store.get('ships:token') || '' });
+const atlas = (() => { try { return Atlas.fromJSON(JSON.parse(store.get('ships:atlas') || 'null')); } catch { return new Atlas(); } })();
+const game = new Game({ atlas });
+const views = new Map();
+let busy = false;
+let saveTimer = 0;
+
+// ---- the renderer and the world ----
+
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(PALETTE.zenith);
+scene.fog = new THREE.Fog(0x2a3238, 500, 2600);
+const camera = new THREE.PerspectiveCamera(60, 1, 0.3, 5000);
+const sea = makeSea(), sky = makeSky();
+scene.add(sky, sea, makeLights());
+const fleet = new DotFleet(3000);
+scene.add(fleet.mesh);
+const craft = makeCraft();
+scene.add(craft.boat, craft.person);
+const shipLabels = new LabelPool(scene, 12);
+const roomLabels = new RoomLabels(scene);
+
+// ---- the panels ----
+
+const app = {
+  game, atlas, github,
+  starred: new Map(),
+  openShip,
+  walkToIssue: (n) => game.walkToIssue(n),
+  flyTo: (i) => { game.flyTo(i); },
+  refreshShip,
+  setStarred(key, on) { app.starred.set(key, on); },
+  ticker: (line, cls) => panels.ticker(line, cls),
+  saveToken(t) {
+    t = (t || '').trim();
+    if (!/^[A-Za-z0-9_\-]{8,255}$/.test(t)) return 'that does not look like a GitHub token';
+    github.setToken(t); store.set('ships:token', t);
+    return 'token saved: it stays in this browser';
+  },
+  clearToken() { github.setToken(''); store.del('ships:token'); return 'token removed'; },
+  cardClosed: () => { if (game.reading) game.reading = null; shownReading = null; },
+};
+const panels = new Panels(app);
+const say = (t, bad = false) => panels.status(t, bad);
+
+function saveAtlasSoon() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { try { store.set('ships:atlas', JSON.stringify(atlas)); } catch { /* too big: the next one is tried later */ } }, 800);
+}
+
+// ---- opening a ship ----
+
+function loadFlag(view, url) {
+  if (!url) return;
+  new THREE.TextureLoader().setCrossOrigin('anonymous').load(`${url}${url.includes('?') ? '&' : '?'}s=128`, (tex) => {
+    tex.colorSpace = THREE.SRGBColorSpace;
+    view.state.flag.material.map = tex;
+    view.state.flag.material.color.set(0xffffff);
+    view.state.flag.material.needsUpdate = true;
+  }, undefined, () => { /* no picture: the flag stays a plain colour */ });
+}
+
+function makeView(i) {
+  const m = game.sea[i];
+  const old = views.get(m.key);
+  if (old) { scene.remove(old.group); old.dispose(); }
+  const view = buildShipView(m, game.conditionOf(i));
+  loadFlag(view, m.repo.avatar);
+  scene.add(view.group);
+  views.set(m.key, view);
+}
+
+/** Reads a ship from GitHub and brings her into the sea. `arrival`: 'fly' (asked for by name), 'land' (the boat is over her), 'near' (looking ahead). */
+async function openShip(fullName, arrival = 'fly') {
+  const t = parseTarget(fullName);
+  if (!t.repo) return;
+  const [owner, name] = t.repo;
+  const have = game.find(`${owner}/${name}`);
+  if (have >= 0 && arrival === 'fly') { game.flyTo(have); return; }
+  if (busy) { say('one thing at a time: wait for the last one'); return; }
+  busy = true;
+  document.getElementById('go').disabled = true;
+  try {
+    say(`reading ${owner}/${name}`);
+    const repo = await github.repo(owner, name);
+    say('drawing the deck plan');
+    let tree;
+    try { tree = await github.tree(owner, name, repo.defaultBranch); } catch (e) { if (e.kind === 'notfound' || e.status === 409) tree = { files: [], partial: null }; else throw e; }
+    const index = new PathIndex(tree.files.map((f) => f[0]));
+    const notes = [];
+    say('looking for cracks');
+    const found = await github.issues(owner, name, index).catch((e) => { notes.push(`issues: ${e.message}`); return { issues: [], more: false }; });
+    say('checking the hull');
+    const checks = await github.checks(owner, name, repo.defaultBranch).catch((e) => { notes.push(`checks: ${e.message}`); return { total: 0, failed: [] }; });
+    if (github.hasToken) github.isStarred(owner, name).then((on) => on !== null && app.setStarred(`${owner}/${name}`.toLowerCase(), on)).catch(() => {});
+    const i = game.moor({ repo, files: tree.files, partial: tree.partial, item: treemap.build(tree.files), issues: found.issues, moreIssues: found.more, checks, notes }, arrival);
+    makeView(i);
+    say(`${repo.fullName} is in the sea`);
+    panels.renderSide();
+  } catch (e) {
+    game.wantLand = null;
+    say(e.message || String(e), true);
+  } finally {
+    busy = false;
+    document.getElementById('go').disabled = false;
+  }
+  if (github.hasToken && game.find(`${owner}/${name}`) >= 0) expand(`${owner}/${name}`);
+}
+game.canOpen = () => !busy;
+
+/** Finds the ships around a ship from the people who starred her, and puts them on the map. */
+async function expand(fullName) {
+  const entry = atlas.get(fullName);
+  if (entry && entry.neighbours.length && game.now() - entry.expandedAt < 86400) return;
+  if (busy) return;
+  busy = true;
+  try {
+    say('asking the people who starred her what else they starred...');
+    const [owner, name] = fullName.split('/');
+    const found = await github.neighbours(owner, name);
+    const m = game.sea[game.find(fullName)];
+    atlas.addExpansion({ name: fullName, stars: m.repo.stars, language: m.repo.language, pushedAt: m.repo.pushedAt }, found, game.now());
+    saveAtlasSoon();
+    say(found.length ? `${found.length} ships lie around ${fullName}` : `nobody who starred ${fullName} has starred much else`);
+    panels.renderSide();
+  } catch (e) {
+    say(`no neighbours: ${e.message}`, true);
+  } finally {
+    busy = false;
+  }
+}
+
+/** Her issues have changed: asked for again, and her cracks made again. */
+async function refreshShip(i) {
+  const m = game.sea[i];
+  if (!m) return;
+  const index = new PathIndex(m.files.map((f) => f[0]));
+  const [found, checks] = await Promise.all([github.issues(m.repo.owner, m.repo.name, index), github.checks(m.repo.owner, m.repo.name, m.repo.defaultBranch).catch(() => null)]);
+  game.setIssues(i, found.issues, found.more, checks);
+  makeView(i);
+  panels.renderSide();
+}
+
+// ---- the search box ----
+
+const q = document.getElementById('q');
+document.getElementById('search').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const t = parseTarget(q.value);
+  panels.hitsEl.hidden = true;
+  if (t.repo) { openShip(`${t.repo[0]}/${t.repo[1]}`); q.blur(); return; }
+  if (t.text.length < 2) { say('type at least two letters, owner/repo, or a GitHub address', true); return; }
+  try {
+    say(`searching for "${t.text}"`);
+    const hits = await github.search(t.text);
+    say(hits.length ? `${hits.length} ships for "${t.text}", most starred first` : `no ship is called anything like "${t.text}"`, !hits.length);
+    panels.hits(hits, game.now());
+  } catch (err) { say(err.message, true); }
+});
+setInterval(() => {
+  const w = github.searchWait();
+  document.getElementById('cool').textContent = w > 0 ? `search cooldown ${Math.ceil(w)}s` : '';
+}, 500);
+
+// ---- keys and the mouse ----
+
+const down = new Set(), pressed = new Set();
+const typing = () => /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName || '');
+addEventListener('keydown', (e) => {
+  if (typing()) { if (e.code === 'Escape') document.activeElement.blur(); return; }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.code === 'Space') e.preventDefault();
+  if (!down.has(e.code)) pressed.add(e.code);
+  down.add(e.code);
+});
+addEventListener('keyup', (e) => down.delete(e.code));
+addEventListener('blur', () => down.clear());
+
+const cam = { yaw: 0, pitch: 0.42, zoom: 1, lastDrag: -10, x: 0, y: 0, z: 0 };
+let drag = null;
+canvas.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY, moved: 0 }; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  drag.x = e.clientX; drag.y = e.clientY; drag.moved += Math.abs(dx) + Math.abs(dy);
+  if (drag.moved > 6) { cam.yaw += dx * 0.006; cam.pitch = Math.min(1.3, Math.max(0.08, cam.pitch + dy * 0.004)); cam.lastDrag = performance.now() / 1000; }
+});
+canvas.addEventListener('pointerup', (e) => {
+  const was = drag; drag = null;
+  if (!was || was.moved > 6) return;
+  const p = pickWorld(e.clientX, e.clientY);
+  if (p) game.click(p, e.detail >= 2);
+});
+canvas.addEventListener('wheel', (e) => { e.preventDefault(); cam.zoom = Math.min(5, Math.max(0.35, cam.zoom * Math.exp(e.deltaY * 0.001))); }, { passive: false });
+
+const ray = new THREE.Raycaster(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+function pickWorld(cx, cy) {
+  ray.setFromCamera(new THREE.Vector2((cx / innerWidth) * 2 - 1, -(cy / innerHeight) * 2 + 1), camera);
+  plane.constant = game.aboard !== null ? -(DECK_Y + 0.1) : 0;
+  const hit = ray.ray.intersectPlane(plane, new THREE.Vector3());
+  return hit ? { x: hit.x, y: hit.z } : null;
+}
+
+function readInput() {
+  const k = (c) => down.has(c) ? 1 : 0;
+  const fwd = k('KeyW') + k('ArrowUp') - k('KeyS') - k('ArrowDown'), side = k('KeyD') + k('ArrowRight') - k('KeyA') - k('ArrowLeft');
+  const fx = Math.cos(cam.yaw), fy = Math.sin(cam.yaw), rx = -Math.sin(cam.yaw), ry = Math.cos(cam.yaw);
+  const input = {
+    move: { x: fx * fwd + rx * side, y: fy * fwd + ry * side }, throttle: Math.max(-1, Math.min(1, fwd)), steer: Math.max(-1, Math.min(1, side)),
+    boost: down.has('ShiftLeft') || down.has('ShiftRight'),
+    leave: pressed.has('Space'), interact: pressed.has('KeyE'), esc: pressed.has('Escape'),
+  };
+  if (pressed.has('Escape') && panels.cardState) { panels.hide(); input.esc = false; }
+  pressed.clear();
+  return input;
+}
+
+// ---- one frame ----
+
+let last = performance.now() / 1000;
+let shownReading = null;
+const feed = { key: null, etag: '', seen: null, next: 0, busy: false };
+
+function handleEvents() {
+  for (const ev of game.events.splice(0)) {
+    if (ev.type === 'arrived') { cam.yaw = 0; cam.zoom = 1; panels.renderSide(); }
+    else if (ev.type === 'boarded') { cam.zoom = 0.7; cam.pitch = 0.5; panels.renderSide(); }
+    else if (ev.type === 'left') { cam.zoom = 1.4; panels.renderSide(); panels.hide(); }
+    else if (ev.type === 'open') openShip(ev.name, 'land');
+    else if (ev.type === 'station') ({ flag: () => panels.flagCard(ev.ship), tavern: () => panels.tavernCard(ev.ship), wheel: () => panels.wheelCard(ev.ship) })[ev.id]?.();
+    else if (ev.type === 'file') panels.fileCard(ev.ship, ev.file);
+  }
+  const r = game.reading;
+  const key = r ? `${r.ship}:${r.issue}` : null;
+  if (key !== shownReading) {
+    shownReading = key;
+    if (r) panels.issueCard(r.ship, r.issue);
+    else if (panels.cardState === 'issue') panels.hide();
+    panels.renderSide();
+  }
+}
+
+/** The ship he is on is kept live: her own feed is asked for once a minute, and what happened shows up on her. */
+async function pollFeed(t) {
+  if (game.aboard === null || feed.busy || t < feed.next || document.hidden) return;
+  const i = game.aboard, m = game.sea[i];
+  if (feed.key !== m.key) Object.assign(feed, { key: m.key, etag: '', seen: null });
+  feed.busy = true;
+  try {
+    const r = await github.events(m.repo.owner, m.repo.name, feed.etag);
+    feed.next = t + Math.max(60, r.interval);
+    if (r.notModified) return;
+    feed.etag = r.etag;
+    const first = feed.seen === null;
+    feed.seen = feed.seen || new Set();
+    let reissue = false, push = false;
+    const fresh = r.events.filter((e) => !feed.seen.has(e.id));
+    for (const e of fresh) feed.seen.add(e.id);
+    if (first) { fresh.slice(0, 3).reverse().forEach((e) => panels.ticker(`${describe(e)} ${agoShort(e.at, game.now())}`)); return; }
+    for (const e of fresh.reverse()) {
+      panels.ticker(describe(e), e.type === 'WatchEvent' ? 'gold' : '');
+      if (e.type === 'WatchEvent') { m.repo.stars += 1; views.get(m.key)?.state.pulse?.(); }
+      if (e.type === 'IssuesEvent' && ['opened', 'closed', 'reopened'].includes(e.action)) reissue = true;
+      if (e.type === 'PushEvent') push = true;
+    }
+    if (reissue) await refreshShip(i);
+    if (push) { const repo = await github.repo(m.repo.owner, m.repo.name); Object.assign(m.repo, { pushedAt: repo.pushedAt, stars: repo.stars }); makeView(i); }
+    panels.renderSide();
+  } catch (e) {
+    feed.next = t + 120;
+  } finally { feed.busy = false; }
+}
+const describe = (e) => {
+  const who = e.actor || 'someone';
+  switch (e.type) {
+    case 'WatchEvent': return `${who} starred her`;
+    case 'ForkEvent': return `${who} forked her`;
+    case 'IssuesEvent': return `${who} ${e.action} #${e.number}`;
+    case 'PullRequestEvent': return `${who} ${e.action} a pull request #${e.number}`;
+    case 'PushEvent': return `${who} pushed`;
+    case 'IssueCommentEvent': return `${who} commented on #${e.number}`;
+    default: return `${who}: ${e.type.replace(/Event$/, '').toLowerCase()}`;
+  }
+};
+const agoShort = (at, now) => { const s = Math.max(0, now - at); return s < 3600 ? `${Math.floor(s / 60)}m ago` : s < 86400 ? `${Math.floor(s / 3600)}h ago` : `${Math.floor(s / 86400)}d ago`; };
+
+function frame() {
+  const t = performance.now() / 1000, dt = Math.min(0.1, t - last);
+  last = t;
+  game.step(dt, readInput());
+  handleEvents();
+
+  // the player
+  const h = game.human, b = game.boat;
+  craft.boat.visible = !h;
+  craft.person.visible = !!h;
+  let tx, ty, tz;
+  if (h) {
+    const m = game.sea[game.aboard];
+    const floatY = (m ? waveHeight(m.x + m.deck.size.w / 2, m.y + m.deck.size.h / 2, t) * 0.6 : 0) - (m && game.conditionOf(game.aboard) === 'wreck' ? 0.9 : 0);
+    const walking = !!(game.walkTo || down.has('KeyW') || down.has('KeyA') || down.has('KeyS') || down.has('KeyD'));
+    craft.person.position.set(h.x, floatY + DECK_Y + (walking ? Math.abs(Math.sin(t * 10)) * 0.06 : 0), h.y);
+    craft.person.rotation.y = -h.face;
+    [tx, ty, tz] = [h.x, floatY + DECK_Y + 1.6, h.y];
+  } else {
+    const wy = waveHeight(b.x, b.y, t) * 0.6;
+    craft.boat.position.set(b.x, wy + 0.1, b.y);
+    craft.boat.rotation.set(0.04 * Math.sin(t * 1.3), -b.heading, 0.05 * Math.sin(t * 0.9), 'YXZ');
+    [tx, ty, tz] = [b.x, wy + 1.5, b.y];
+  }
+  // the camera follows from behind, higher up the further out it is
+  if (!h && t - cam.lastDrag > 1.2) {
+    let d = b.heading - cam.yaw; d = Math.atan2(Math.sin(d), Math.cos(d));
+    cam.yaw += d * (1 - Math.exp(-1.6 * dt));
+  }
+  const dist = (h ? 9 : 26) * cam.zoom;
+  cam.x += (tx - cam.x) * (1 - Math.exp(-8 * dt)); cam.y += (ty - cam.y) * (1 - Math.exp(-8 * dt)); cam.z += (tz - cam.z) * (1 - Math.exp(-8 * dt));
+  camera.position.set(cam.x - Math.cos(cam.yaw) * Math.cos(cam.pitch) * dist, cam.y + Math.sin(cam.pitch) * dist, cam.z - Math.sin(cam.yaw) * Math.cos(cam.pitch) * dist);
+  camera.lookAt(cam.x, cam.y + 0.5, cam.z);
+
+  // the world
+  sea.position.set(Math.round(camera.position.x / 12.5) * 12.5, 0, Math.round(camera.position.z / 12.5) * 12.5);
+  sea.material.uniforms.uTime.value = t;
+  sky.position.copy(camera.position);
+  const loaded = new Set(game.sea.map((m) => m.key));
+  const around = { x: cam.x, y: cam.z };
+  fleet.update(atlas.dotsIn(around.x - 1500, around.y - 1500, around.x + 1500, around.y + 1500), loaded, around, t);
+  shipLabels.update(fleet.entries.slice(0, 12), t);
+  game.sea.forEach((m, i) => {
+    const near = game.aboard === i;
+    views.get(m.key)?.update(t, near ? game.nearCrack : -1, game.reading?.ship === i ? game.reading.issue : null, !!app.starred.get(m.key));
+  });
+  if (game.aboard !== null) roomLabels.update(game.sea[game.aboard], { x: game.human.x - game.sea[game.aboard].x, y: game.human.y - game.sea[game.aboard].y }, t, waveHeight(game.human.x, game.human.y, t) * 0.6);
+  else roomLabels.group.children.forEach((s) => { s.visible = false; });
+
+  panels.prompt(game.prompt);
+  document.getElementById('hint').textContent = game.aboard !== null
+    ? 'W A S D walk  -  Shift run  -  click to walk  -  E: read a crack, use the flag, table or wheel, open a file  -  Space: back to your boat  -  drag to look, wheel to zoom'
+    : 'W S sail  -  A D steer  -  Shift boost  -  sail over a ship to land on her  -  double-click a ship to board  -  drag to look, wheel to zoom';
+  pollFeed(t);
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+function resize() {
+  renderer.setSize(innerWidth, innerHeight, false);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+panels.renderSide();
+setInterval(() => { if (!document.getElementById('side').contains(document.activeElement)) panels.renderSide(); }, 10000);
+// framed inside Odysseus: a way back (the page around it closes the frame and leaves full screen)
+if (window.parent !== window) {
+  const back = document.getElementById('back');
+  back.hidden = false;
+  back.addEventListener('click', () => window.parent.postMessage({ type: 'ships:back' }, location.origin));
+}
+const start = new URLSearchParams(location.search).get('open');
+if (start) openShip(start);
+if (new URLSearchParams(location.search).has('debug')) window.__ships = { game, camera, scene, renderer, atlas, github, cam, THREE, openShip, views };
+requestAnimationFrame(frame);

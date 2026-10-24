@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ships</title>
+  <link rel="stylesheet" href="css/ships.css">
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <div id="hud">
+    <header id="top">
+      <form id="search" autocomplete="off">
+        <input id="q" type="text" placeholder="owner/repo, a GitHub address, or words to search" spellcheck="false">
+        <button id="go" type="submit">Sail</button>
+        <span id="cool"></span>
+      </form>
+      <div id="status"></div>
+      <ol id="hits" hidden></ol>
+    </header>
+    <button id="back" type="button" hidden>Back to Odysseus</button>
+    <aside id="side"></aside>
+    <section id="card" hidden></section>
+    <div id="prompt" hidden></div>
+    <ul id="ticker"></ul>
+    <footer id="hint"></footer>
+  </div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
