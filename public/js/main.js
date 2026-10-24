@@ -470,12 +470,6 @@ addEventListener('resize', resize);
 resize();
 panels.renderSide();
 setInterval(() => { if (!document.getElementById('side').contains(document.activeElement)) panels.renderSide(); }, 10000);
-// framed inside Odysseus: a way back (the page around it closes the frame and leaves full screen)
-if (window.parent !== window) {
-  const back = document.getElementById('back');
-  back.hidden = false;
-  back.addEventListener('click', () => window.parent.postMessage({ type: 'ships:back' }, location.origin));
-}
 const start = new URLSearchParams(location.search).get('open');
 if (start) openShip(start);
 if (new URLSearchParams(location.search).has('debug')) window.__ships = { game, camera, scene, renderer, atlas, github, cam, THREE, openShip, views, makeView, crews, Crew, CrewView, peopleOf };

@@ -20,7 +20,6 @@ button:disabled { opacity: 0.45; cursor: default; }
 button.danger { border-color: var(--red); color: var(--red); }
 button.armed { background: var(--red); color: #111; border-color: var(--red); }
 #cool { color: var(--muted); }
-#back { position: absolute; right: 12px; top: 10px; z-index: 2; }
 #status { margin-top: 5px; min-height: 1.3em; text-shadow: 0 0 4px #000; }
 #status.bad { color: var(--red); }
 #hits { list-style: none; margin: 6px 0 0; padding: 0; background: rgba(17, 17, 17, 0.94); border: 1px solid var(--border); border-radius: 4px; max-height: 50vh; overflow: auto; }
@@ -61,3 +60,6 @@ button.armed { background: var(--red); color: #111; border-color: var(--red); }
 #card ul.people li { display: flex; align-items: center; }
 #card ul.people .muted { margin-left: 8px; }
 #card h3 { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+
+/* in a small window (the Odysseus panel) the side bar is narrower */
+@media (max-width: 900px) { #side { width: 250px; padding: 8px 9px; } }

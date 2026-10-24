@@ -1,4 +1,4 @@
-# Ships
+# Sail
 
 Every public GitHub repo is a ship on a dusk sea. Sail your boat over a ship and you land on her main deck as a sailor. She has three storeys:
 

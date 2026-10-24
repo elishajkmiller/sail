@@ -93,7 +93,7 @@ export class Panels {
     const kids = [];
     const m = game.focus !== null ? game.sea[game.focus] : null;
     if (!m) {
-      kids.push(el('h2', { text: 'Ships' }),
+      kids.push(el('h2', { text: 'Sail' }),
         el('p', { text: 'Every public GitHub repo is a ship. Bring one in by name (owner/repo, or its address) or search for words, then sail to her.' }),
         el('p', { class: 'muted', text: 'A ship\'s condition comes from her last push: sailing (90 days), anchored (a year), derelict (older). An archived repo is a wreck. Below her deck, in the hold, her open issues are cracks. On deck is a table for every discussion; the helm is where she is managed; under the helm are the captain\'s quarters. Repos that the same people starred lie near each other.' }));
     } else {

@@ -1,4 +1,4 @@
-# ships
+# sail
 
 Browser game: every public GitHub repo is a ship (three.js, no backend, GitHub API from the browser). See README.md.
 
