@@ -33,7 +33,8 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(PALETTE.zenith);
+const DUSK = new THREE.Color(PALETTE.zenith), CAVE = new THREE.Color(0x0c0a08);
+scene.background = DUSK;
 scene.fog = new THREE.Fog(0x2a3238, 500, 2600);
 const camera = new THREE.PerspectiveCamera(60, 1, 0.3, 5000);
 // the picture is drawn in big pixels (add ?crisp to the address for the smooth one)
@@ -392,16 +393,22 @@ function frame() {
   sea.material.uniforms.uTime.value = t;
   if (crisp) updateSea(sea, camera, renderer.getDrawingBufferSize(drawSize), Math.max(2, Math.round(PIXEL * renderer.getPixelRatio())));
   else updateSea(sea, camera, pixels.size, 1);
-  setSeaHole(sea, game.aboard !== null && game.level === 'hold' ? game.sea[game.aboard] : null);
+  // aboard, the sea does not run through the ship (through the hatch, from the deck, she has a hold and not water under her); below deck and in
+  // the quarters the near side of the hull is not drawn, and with it the sea and sky would show past the edge, so there the ship hangs in the dark
+  const inside = game.aboard !== null && (game.level === 'hold' || game.level === 'quarters');
+  setSeaHole(sea, game.aboard !== null ? game.sea[game.aboard] : null);
+  sea.visible = sky.visible = fleet.mesh.visible = !inside;
+  scene.background = inside ? CAVE : DUSK;
   sky.position.copy(camera.position);
   const loaded = new Set(game.sea.map((m) => m.key));
   const around = { x: cam.x, y: cam.z };
   fleet.update(atlas.dotsIn(around.x - 1500, around.y - 1500, around.x + 1500, around.y + 1500), loaded, around, t);
-  shipLabels.update(fleet.entries.slice(0, 12), t);
+  shipLabels.update(inside ? [] : fleet.entries.slice(0, 12), t);
   game.sea.forEach((m, i) => {
     const near = game.aboard === i;
     const view = views.get(m.key);
     if (!view) return;
+    view.group.visible = near || !inside;
     const want = near ? game.level : null;
     if (view.level !== want) view.setLevel(want);
     view.update(t, near && game.level === 'hold' ? game.nearCrack : -1, game.reading?.ship === i ? game.reading.issue : null, !!app.starred.get(m.key));
